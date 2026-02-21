@@ -640,6 +640,7 @@ function normalizePrompt(prompt) {
   return String(prompt || "")
     .trim()
     .replace(/\s+/g, " ")
+    .replace(/\bmvps\b/gi, "mvp")
     .toLowerCase();
 }
 
@@ -722,6 +723,7 @@ function canonicalizePromptForKey(prompt) {
   t = t.replace(/\bsuper bowls\b/g, "super bowl");
   t = t.replace(/\bafc championship\b/g, "afc");
   t = t.replace(/\bnfc championship\b/g, "nfc");
+  t = t.replace(/\bmvps\b/g, "mvp");
   t = t.replace(/[^\w\s]/g, " ");
   t = t.replace(/\b(what are the odds that|what are the odds|what are odds that|odds that)\b/g, " ");
   t = t.replace(/\b(in his career|in her career|in their career)\b/g, " ");
@@ -744,6 +746,7 @@ function normalizePromptForModel(prompt) {
   t = t.replace(/\bthis nfl season\b/gi, "this nfl regular season");
   t = t.replace(/\bafc championship winner\b/gi, "afc winner");
   t = t.replace(/\bnfc championship winner\b/gi, "nfc winner");
+  t = t.replace(/\bmvps\b/gi, "mvp");
   return t.trim();
 }
 
@@ -3985,16 +3988,9 @@ app.post("/api/odds", async (req, res) => {
       semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value });
       return res.json(value);
     }
-    if (hasNflMvpPrompt(promptForParsing)) {
-      metrics.refusals += 1;
-      return res.json({
-        status: "refused",
-        title: "No Live Market Found",
-        message:
-          "No current DraftKings/FanDuel MVP reference line was found in the configured live odds feed right now.",
-        hint: "Try a team futures market, or wire an awards-capable odds feed for MVP pricing.",
-      });
-    }
+    // MVP prompts should use live sportsbook odds when available, but must
+    // gracefully fall back to deterministic/hypothetical models if a live
+    // market is not currently present in the feed.
 
     const seasonTeamFallback = await buildSeasonTeamTitleFallback(
       promptForParsing,

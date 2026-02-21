@@ -378,6 +378,13 @@ button {
   align-items: center;
 }
 
+.examples-best {
+  margin: 0 0 2px;
+  width: 100%;
+  font-size: 0.76rem;
+  color: #9f8f7a;
+}
+
 .examples.examples-refresh .example-chip {
   animation: chipSwap 320ms ease;
 }

@@ -19,32 +19,34 @@ const copyBtn = document.getElementById("copy-btn");
 const statusLine = document.getElementById("status-line");
 const examplesWrap = document.querySelector(".examples");
 const PLACEHOLDER_ROTATE_MS = 3200;
+const EXAMPLE_REFRESH_MS = 12000;
 const CLIENT_API_VERSION = "2026.02.20.1";
 
 const DEFAULT_EXAMPLE_POOL = [
-  "Lions win the NFC next season",
-  "Chiefs miss the playoffs",
-  "Josh Allen wins MVP",
-  "Ravens get the AFC 1 seed",
-  "Patriots win the AFC East",
-  "Packers make the playoffs",
-  "Cowboys reach the NFC Championship",
-  "A rookie wins NFL MVP",
-  "Drake Maye throws 45 touchdowns next year",
-  "A team goes 17-0 in the regular season",
-  "Celtics repeat as champions",
-  "Lakers win the NBA Finals",
-  "Warriors win the NBA Finals",
-  "Yankees win the World Series",
-  "A kicker wins MVP",
-  "Texans win the AFC South",
-  "49ers win the Super Bowl",
+  "Josh Allen throws 30 touchdowns this season",
+  "Drake Maye wins MVP this season",
+  "Bijan Robinson scores 12 rushing TDs this season",
+  "Ja'Marr Chase gets 1400 receiving yards this season",
+  "Justin Jefferson scores 10 receiving TDs this season",
+  "CeeDee Lamb catches 105 passes this season",
+  "Breece Hall gets 1500 scrimmage yards this season",
+  "Amon-Ra St. Brown gets 1200 receiving yards this season",
+  "Lamar Jackson throws 35 touchdowns this season",
+  "Joe Burrow throws 4200 passing yards this season",
+  "Brock Bowers scores 8 receiving TDs this season",
+  "Jahmyr Gibbs scores 14 total TDs this season",
+  "Chiefs win the AFC next season",
+  "Patriots win the AFC East next season",
+  "A team goes 17-0 in the NFL regular season",
+  "A team goes 0-17 in the NFL regular season",
+  "Drake Maye wins 2 Super Bowls",
 ];
 let examplePool = [...DEFAULT_EXAMPLE_POOL];
 let lastExamples = [];
 let placeholderPool = [...DEFAULT_EXAMPLE_POOL];
 let placeholderIdx = 0;
 let placeholderTimer = null;
+let exampleTimer = null;
 
 function normalizePrompt(prompt) {
   return prompt
@@ -318,6 +320,20 @@ function setupExampleChips() {
   });
 }
 
+function uniqByNormalized(items) {
+  const out = [];
+  const seen = new Set();
+  for (const item of items) {
+    const text = String(item || "").trim();
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+  }
+  return out;
+}
+
 function chooseFreshExamples() {
   const pool = examplePool.filter((item) => !lastExamples.includes(item));
   const source = pool.length >= 3 ? pool : examplePool;
@@ -349,7 +365,10 @@ function refreshExampleChips() {
 
 function pickNextPlaceholder() {
   if (!placeholderPool.length) return "";
-  placeholderIdx = (placeholderIdx + 1) % placeholderPool.length;
+  if (placeholderPool.length === 1) return placeholderPool[0];
+  let idx = Math.floor(Math.random() * placeholderPool.length);
+  if (idx === placeholderIdx) idx = (idx + 1) % placeholderPool.length;
+  placeholderIdx = idx;
   return placeholderPool[placeholderIdx];
 }
 
@@ -363,31 +382,36 @@ function applyPlaceholderSwap(text) {
 
 function startPlaceholderRotation() {
   if (placeholderTimer) clearInterval(placeholderTimer);
-  if (!scenarioInput.placeholder) {
-    scenarioInput.placeholder = placeholderPool[0] || "Team X wins the championship next season";
-  }
+  if (!scenarioInput.placeholder) scenarioInput.placeholder = pickNextPlaceholder() || "Josh Allen throws 30 touchdowns this season";
   placeholderTimer = setInterval(() => {
     if (document.activeElement === scenarioInput && scenarioInput.value.trim()) return;
     applyPlaceholderSwap(pickNextPlaceholder());
   }, PLACEHOLDER_ROTATE_MS);
 }
 
+function startExampleRotation() {
+  if (exampleTimer) clearInterval(exampleTimer);
+  exampleTimer = setInterval(() => {
+    if (document.activeElement === scenarioInput && scenarioInput.value.trim()) return;
+    refreshExampleChips();
+  }, EXAMPLE_REFRESH_MS);
+}
+
 async function hydrateLiveSuggestions() {
   try {
     const prompts = await fetchSuggestions();
-    if (prompts && prompts.length >= 3) {
-      examplePool = prompts;
-      placeholderPool = [...prompts];
-    } else {
-      examplePool = [...DEFAULT_EXAMPLE_POOL];
-      placeholderPool = [...DEFAULT_EXAMPLE_POOL];
-    }
+    const merged = uniqByNormalized([...(prompts || []), ...DEFAULT_EXAMPLE_POOL]);
+    examplePool = merged.length >= 3 ? merged : [...DEFAULT_EXAMPLE_POOL];
+    placeholderPool = [...examplePool];
+    placeholderIdx = Math.floor(Math.random() * Math.max(1, placeholderPool.length));
   } catch (_error) {
     examplePool = [...DEFAULT_EXAMPLE_POOL];
     placeholderPool = [...DEFAULT_EXAMPLE_POOL];
+    placeholderIdx = Math.floor(Math.random() * Math.max(1, placeholderPool.length));
   } finally {
     refreshExampleChips();
     startPlaceholderRotation();
+    startExampleRotation();
   }
 }
 

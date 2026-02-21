@@ -1345,12 +1345,13 @@ function numberWordsToDigits(text) {
 
 function parseCareerSuperBowlIntent(prompt) {
   const normalized = numberWordsToDigits(prompt).toLowerCase().replace(/\bto win\b/g, "wins");
-  const m = normalized.match(/\b([a-z]+(?:\s+[a-z]+){1,2})\s+wins?\s+(\d+)\s+super\s*bowls?\b/i);
-  if (!m) return null;
-  const wins = Number(m[2]);
+  const withCount = normalized.match(/\b([a-z]+(?:\s+[a-z]+){1,2})\s+wins?\s+(\d+)\s+super\s*bowls?\b/i);
+  const singular = normalized.match(/\b([a-z]+(?:\s+[a-z]+){1,2})\s+wins?\s+(?:a|an|one)\s+super\s*bowl\b/i);
+  if (!withCount && !singular) return null;
+  const wins = withCount ? Number(withCount[2]) : 1;
   if (!Number.isFinite(wins) || wins < 1 || wins > 7) return null;
   return {
-    playerPhrase: m[1],
+    playerPhrase: withCount?.[1] || singular?.[1] || "",
     wins,
   };
 }
@@ -1454,6 +1455,97 @@ async function estimateCareerSuperBowlOdds(prompt, playerName, localPlayerStatus
     asOfDate: sbRef?.asOfDate || new Date().toISOString().slice(0, 10),
     sourceType: sbRef ? "hybrid_anchored" : "hypothetical",
     sourceLabel: sbRef ? "Career model anchored to live SB market" : "Career historical model",
+  };
+}
+
+function parseMvpIntent(prompt) {
+  const lower = normalizePrompt(prompt);
+  if (!/\b(mvp|most valuable player)\b/.test(lower)) return null;
+  const m = lower.match(/\b(win|wins|won|to win)\s+(\d+)\s+(mvp|most valuable player)\b/);
+  const count = m ? Number(m[2]) : 1;
+  if (!Number.isFinite(count) || count < 1 || count > 8) return null;
+  return { count };
+}
+
+function probabilityAtLeastFromCountDistribution(distribution, threshold) {
+  if (!Array.isArray(distribution) || !distribution.length) return null;
+  let sum = 0;
+  for (const row of distribution) {
+    const c = row?.count;
+    const p = Number(row?.probabilityPct || 0);
+    if (!Number.isFinite(p)) continue;
+    if (typeof c === "number") {
+      if (c >= threshold) sum += p;
+      continue;
+    }
+    if (typeof c === "string" && /\+$/.test(c)) {
+      const floor = Number(c.replace("+", ""));
+      if (Number.isFinite(floor) && floor >= threshold) sum += p;
+    }
+  }
+  return clamp(sum, 0.01, 99.9);
+}
+
+async function estimatePlayerMvpOdds(prompt, intent, playerName, localPlayerStatus, asOfDate) {
+  const mvpIntent = parseMvpIntent(prompt);
+  if (!mvpIntent || !playerName || !localPlayerStatus) return null;
+
+  const hints = parseLocalIndexNote(localPlayerStatus.note);
+  const profile = {
+    name: playerName,
+    position: hints.position || "",
+    teamAbbr: localPlayerStatus.teamAbbr || hints.teamAbbr || "",
+    yearsExp: hints.yearsExp,
+    age: hints.age,
+    status: localPlayerStatus.status || "unknown",
+  };
+
+  const teamName = NFL_TEAM_DISPLAY[profile.teamAbbr] || profile.teamAbbr || "";
+  const sbRef = teamName ? await getSportsbookReferenceByTeamAndMarket(teamName, "super_bowl_winner") : null;
+  const teamSuperBowlPct = sbRef ? Number(String(sbRef.impliedProbability || "").replace("%", "")) : 0;
+  const outcomes = buildPlayerOutcomes(profile, {
+    teamSuperBowlPct,
+    asOfDate,
+    calibration: phase2Calibration || {},
+  });
+  const mvp = outcomes?.awards?.mvp;
+  if (!mvp) return null;
+
+  let probabilityPct = null;
+  if (intent?.horizon === "season" || intent?.horizon === "next_season") {
+    if (mvpIntent.count >= 2) {
+      return noChanceEstimate(prompt, asOfDate);
+    }
+    const years = Math.max(3, estimateCareerYearsRemaining(hints));
+    const seasonPct = clamp((Number(mvp.expectedCount || 0) / years) * 100, 0.1, 80);
+    probabilityPct = seasonPct;
+  } else {
+    probabilityPct = probabilityAtLeastFromCountDistribution(mvp.distribution, mvpIntent.count);
+  }
+  if (!Number.isFinite(probabilityPct)) return null;
+
+  return {
+    status: "ok",
+    odds: toAmericanOdds(probabilityPct),
+    impliedProbability: `${probabilityPct.toFixed(1)}%`,
+    confidence: "High",
+    assumptions: [
+      "Deterministic player-award model used with position, age/experience, and team strength context.",
+      sbRef ? `Team strength anchored by live Super Bowl reference (${sbRef.odds}).` : "No live team anchor available; historical priors used.",
+    ],
+    playerName,
+    headshotUrl: null,
+    summaryLabel: mvpIntent.count > 1 ? `${playerName} wins ${mvpIntent.count} MVPs` : `${playerName} wins MVP`,
+    liveChecked: Boolean(sbRef),
+    asOfDate,
+    sourceType: sbRef ? "hybrid_anchored" : "historical_model",
+    sourceLabel: sbRef ? "Award model with team-market anchor" : "Award baseline model",
+    trace: {
+      award: "mvp",
+      countTarget: mvpIntent.count,
+      horizon: intent?.horizon || "unspecified",
+      expectedCountCareer: mvp.expectedCount,
+    },
   };
 }
 
@@ -4023,7 +4115,7 @@ app.post("/api/odds", async (req, res) => {
       ]);
       let localPlayerStatus = initialLocalPlayerStatus;
       let resolvedPlayerHint = playerHint;
-      if (!localPlayerStatus && playerHint && !teamHint && hasStrongSportsContext(prompt)) {
+      if (!localPlayerStatus && playerHint && !teamHint && hasStrongSportsContext(promptForParsing)) {
         const fuzzyMatch = await getFuzzyLocalNflPlayerStatus(playerHint, targetNflTeamAbbr || "");
         if (fuzzyMatch?.status) {
           localPlayerStatus = fuzzyMatch.status;
@@ -4110,6 +4202,32 @@ app.post("/api/odds", async (req, res) => {
           const value = await enrichEntityMedia(
             promptForParsing,
             hofEstimate,
+            resolvedPlayerHint || playerHint,
+            "",
+            {
+              preferredTeamAbbr: localPlayerStatus?.teamAbbr || "",
+              preferActive: localPlayerStatus?.status === "active",
+            }
+          );
+          oddsCache.set(normalizedPrompt, { ts: Date.now(), value });
+          semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value });
+          metrics.baselineServed += 1;
+          return res.json(value);
+        }
+      }
+
+      if (playerHint && /\b(mvp|most valuable player)\b/i.test(promptForParsing)) {
+        const mvpEstimate = await estimatePlayerMvpOdds(
+          promptForParsing,
+          intent,
+          resolvedPlayerHint || playerHint,
+          localPlayerStatus,
+          liveContext?.asOfDate || today
+        );
+        if (mvpEstimate) {
+          const value = await enrichEntityMedia(
+            promptForParsing,
+            mvpEstimate,
             resolvedPlayerHint || playerHint,
             "",
             {

@@ -1678,6 +1678,7 @@ function evaluatePositionReality(prompt, playerStatus) {
   }
 
   if (intent.type === "passing_td" && group !== "qb") {
+    if (group === "unknown") return { noChance: false, capPct: null, reason: "unknown_position_skip" };
     if (c >= 10) return { noChance: true, capPct: null, reason: "non_qb_high_passing_td" };
     return { noChance: false, capPct: 0.8, reason: "non_qb_passing_td_cap" };
   }
@@ -1946,6 +1947,22 @@ function hasNflSpecificContext(prompt) {
   );
 }
 
+function isNonNflSportsPrompt(prompt) {
+  const lower = normalizePrompt(prompt);
+  return /\b(nba|mlb|nhl|wnba|ncaa|soccer|premier league|epl|champions league|ufc|mma|f1|formula 1|tennis|golf|world series|stanley cup|nba finals|mlb)\b/.test(
+    lower
+  );
+}
+
+function buildNflOnlySnarkResponse() {
+  return {
+    status: "snark",
+    title: "NFL Only Right Now.",
+    message: "This version is focused on NFL scenarios only.",
+    hint: "Try an NFL prompt: QB/RB/WR/TE stat line, MVP, playoffs, or Super Bowl.",
+  };
+}
+
 function mapSleeperStatus(rawStatus) {
   const s = String(rawStatus || "").toLowerCase();
   if (!s) return "unknown";
@@ -2066,6 +2083,38 @@ async function getLocalNflPlayerStatus(player, preferredTeamAbbr = "") {
     isSportsFigure: "yes",
     teamAbbr: found.team || "",
     note: `local_nfl_index:${found.team || "FA"}:${found.position || "NA"}:${found.yearsExp ?? "NA"}:${found.age ?? "NA"}`,
+  };
+}
+
+function inferPreferredPositionFromPrompt(prompt) {
+  const lower = normalizePrompt(prompt);
+  if (/\b(qb|quarterback|throw|throws|passing|passes|passing yards?|passing tds?)\b/.test(lower)) return "QB";
+  if (/\b(catch|catches|receiv|receiving)\b/.test(lower)) return "WR";
+  if (/\b(rush|rushing|runs?|carries)\b/.test(lower)) return "RB";
+  return "";
+}
+
+async function alignPlayerStatusToPromptPosition(playerName, status, prompt, preferredTeamAbbr = "") {
+  if (!playerName || !status) return status;
+  if (nflPlayerIndex.size === 0) return status;
+  const preferredPos = inferPreferredPositionFromPrompt(prompt);
+  if (!preferredPos) return status;
+
+  const key = normalizePersonName(playerName);
+  const candidates = nflPlayerIndex.get(key);
+  if (!candidates || candidates.length === 0) return status;
+  const matching = candidates.filter((c) => String(c.position || "").toUpperCase() === preferredPos);
+  if (!matching.length) return status;
+
+  const teamMatch =
+    preferredTeamAbbr &&
+    matching.find((c) => c.team && c.team.toUpperCase() === preferredTeamAbbr.toUpperCase());
+  const active = matching.find((c) => c.status === "active");
+  const chosen = teamMatch || active || matching[0];
+  return {
+    ...status,
+    teamAbbr: chosen.team || status.teamAbbr || "",
+    note: `local_nfl_index:${chosen.team || "FA"}:${chosen.position || "NA"}:${chosen.yearsExp ?? "NA"}:${chosen.age ?? "NA"}`,
   };
 }
 
@@ -4068,6 +4117,11 @@ app.post("/api/odds", async (req, res) => {
       });
     }
 
+    if (isNonNflSportsPrompt(promptForParsing)) {
+      metrics.snarks += 1;
+      return res.json(buildNflOnlySnarkResponse());
+    }
+
     if (/\b(my friend|my buddy|my cousin|my brother|my sister|my dad|my mom|my uncle|my aunt)\b/i.test(promptForParsing)) {
       metrics.snarks += 1;
       return res.json(buildOffTopicSnarkResponse(promptForParsing));
@@ -4351,6 +4405,14 @@ app.post("/api/odds", async (req, res) => {
           localPlayerStatus = fuzzyMatch.status;
           resolvedPlayerHint = fuzzyMatch.matchedName || playerHint;
         }
+      }
+      if (localPlayerStatus && (resolvedPlayerHint || playerHint)) {
+        localPlayerStatus = await alignPlayerStatusToPromptPosition(
+          resolvedPlayerHint || playerHint,
+          localPlayerStatus,
+          promptForParsing,
+          targetNflTeamAbbr || ""
+        );
       }
       const playerStatus = playerHint
         ? localPlayerStatus || (await getPlayerStatusLive(resolvedPlayerHint || playerHint))
@@ -5011,10 +5073,16 @@ app.post("/api/player/performance-threshold", async (req, res) => {
 app.get("/api/suggestions", async (_req, res) => {
   try {
     const state = await refreshLiveSportsState(false);
+    const prompts = Array.isArray(state?.suggestedPrompts)
+      ? state.suggestedPrompts
+          .filter((p) => typeof p === "string" && p.trim().length > 0)
+          .filter((p) => !isNonNflSportsPrompt(p) && hasNflSpecificContext(p))
+          .slice(0, 8)
+      : [];
     return res.json({
       status: "ok",
       asOfDate: state?.asOfDate || new Date().toISOString().slice(0, 10),
-      prompts: Array.isArray(state?.suggestedPrompts) ? state.suggestedPrompts.slice(0, 8) : [],
+      prompts,
     });
   } catch (_error) {
     return res.json({
@@ -5022,9 +5090,9 @@ app.get("/api/suggestions", async (_req, res) => {
       asOfDate: new Date().toISOString().slice(0, 10),
       prompts: [
         "Chiefs win the AFC next season",
-        "A rookie QB makes the Pro Bowl",
-        "Lakers win the NBA Finals",
-        "Yankees win the World Series",
+        "Josh Allen throws 30 touchdowns this season",
+        "Justin Jefferson scores 10 receiving TDs this season",
+        "A team goes 17-0 in the NFL regular season",
       ],
     });
   }

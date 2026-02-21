@@ -48,6 +48,16 @@ let placeholderIdx = 0;
 let placeholderTimer = null;
 let exampleTimer = null;
 
+function isNflPrompt(prompt) {
+  const text = String(prompt || "").toLowerCase();
+  if (!text.trim()) return false;
+  const nonNfl = /\b(nba|mlb|nhl|wnba|soccer|premier league|epl|world series|stanley cup|nba finals|ufc|mma|f1|formula 1|tennis|golf)\b/.test(text);
+  if (nonNfl) return false;
+  return /\b(nfl|afc|nfc|super bowl|playoffs?|mvp|qb|quarterback|rb|wr|te|touchdowns?|tds?|passing|receiving|interceptions?|ints?|yards?|patriots|chiefs|bills|jets|dolphins|ravens|49ers|packers|cowboys|eagles|burrow|allen|lamar|maye|jefferson|chase|gibbs|bijan|breece)\b/.test(
+    text
+  );
+}
+
 function normalizePrompt(prompt) {
   return prompt
     .trim()
@@ -241,7 +251,7 @@ async function fetchSuggestions() {
   if (!response.ok) return null;
   const payload = await response.json();
   if (!payload || !Array.isArray(payload.prompts)) return null;
-  return payload.prompts.filter((p) => typeof p === "string" && p.trim().length > 0);
+  return payload.prompts.filter((p) => typeof p === "string" && p.trim().length > 0 && isNflPrompt(p));
 }
 
 async function onSubmit(event) {
@@ -400,7 +410,7 @@ function startExampleRotation() {
 async function hydrateLiveSuggestions() {
   try {
     const prompts = await fetchSuggestions();
-    const merged = uniqByNormalized([...(prompts || []), ...DEFAULT_EXAMPLE_POOL]);
+    const merged = uniqByNormalized([...(prompts || []).filter(isNflPrompt), ...DEFAULT_EXAMPLE_POOL]).filter(isNflPrompt);
     examplePool = merged.length >= 3 ? merged : [...DEFAULT_EXAMPLE_POOL];
     placeholderPool = [...examplePool];
     placeholderIdx = Math.floor(Math.random() * Math.max(1, placeholderPool.length));

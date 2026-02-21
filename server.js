@@ -1346,7 +1346,7 @@ function numberWordsToDigits(text) {
 function parseCareerSuperBowlIntent(prompt) {
   const normalized = numberWordsToDigits(prompt).toLowerCase().replace(/\bto win\b/g, "wins");
   const withCount = normalized.match(/\b([a-z]+(?:\s+[a-z]+){1,2})\s+wins?\s+(\d+)\s+super\s*bowls?\b/i);
-  const singular = normalized.match(/\b([a-z]+(?:\s+[a-z]+){1,2})\s+wins?\s+(?:a|an|one)\s+super\s*bowl\b/i);
+  const singular = normalized.match(/\b([a-z]+(?:\s+[a-z]+){1,2})\s+wins?\s+(?:(?:a|an|one)\s+)?super\s*bowl\b/i);
   if (!withCount && !singular) return null;
   const wins = withCount ? Number(withCount[2]) : 1;
   if (!Number.isFinite(wins) || wins < 1 || wins > 7) return null;
@@ -1365,10 +1365,10 @@ function americanOddsToProbabilityPct(oddsText) {
 
 function getTopQbBoost(playerName) {
   const key = normalizePersonName(playerName);
-  if (["patrick mahomes"].includes(key)) return 1.65;
-  if (["josh allen", "joe burrow", "lamar jackson"].includes(key)) return 1.45;
-  if (["jalen hurts", "justin herbert", "cj stroud"].includes(key)) return 1.2;
-  if (["drake maye", "caleb williams", "jayden daniels"].includes(key)) return 0.68;
+  if (["patrick mahomes"].includes(key)) return 1.55;
+  if (["josh allen", "joe burrow", "lamar jackson"].includes(key)) return 1.35;
+  if (["jalen hurts", "justin herbert", "cj stroud"].includes(key)) return 1.15;
+  if (["drake maye", "caleb williams", "jayden daniels"].includes(key)) return 1.0;
   return 1;
 }
 
@@ -1399,15 +1399,34 @@ function historicalCapForSuperBowls(positionGroupName, winsTarget, yearsExp) {
   const exp = Number(yearsExp || 0);
   const young = Number.isFinite(exp) && exp <= 2;
   if (positionGroupName === "qb") {
-    if (winsTarget === 1) return young ? 24 : 42;
-    if (winsTarget === 2) return young ? 10 : 18;
-    if (winsTarget === 3) return 8;
+    if (winsTarget === 1) return young ? 34 : 46;
+    if (winsTarget === 2) return young ? 18 : 24;
+    if (winsTarget === 3) return 10;
     if (winsTarget >= 4) return 3;
   }
   if (winsTarget === 1) return 20;
   if (winsTarget === 2) return 6;
   if (winsTarget === 3) return 2.4;
   return 1;
+}
+
+function buildCareerSeasonCurve(baseSeasonWinPct, yearsRemaining, yearsExp, posGroup) {
+  const exp = Number(yearsExp || 0);
+  const curve = [];
+  for (let i = 0; i < yearsRemaining; i += 1) {
+    const careerYear = exp + i + 1;
+    let roleFactor = 1;
+    if (careerYear <= 2) roleFactor *= 0.78;
+    else if (careerYear <= 4) roleFactor *= 0.92;
+    else if (careerYear <= 9) roleFactor *= 1.05;
+    else if (careerYear <= 12) roleFactor *= 0.92;
+    else roleFactor *= 0.8;
+
+    if (posGroup !== "qb") roleFactor *= 0.74;
+    const parityDecay = Math.pow(0.97, i);
+    curve.push(clamp((baseSeasonWinPct * roleFactor * parityDecay) / 100, 0.001, 0.38));
+  }
+  return curve;
 }
 
 async function estimateCareerSuperBowlOdds(prompt, playerName, localPlayerStatus) {
@@ -1429,11 +1448,12 @@ async function estimateCareerSuperBowlOdds(prompt, playerName, localPlayerStatus
   if (posGroup === "qb" && Number(localHints.yearsExp || 0) >= 4) playerShare *= 1.12;
   const baseSeasonWinPct = clamp(teamSeasonPct * playerShare, 0.2, 35);
 
-  const perSeason = [];
-  for (let i = 0; i < yearsRemaining; i += 1) {
-    const decay = Math.pow(0.94, i);
-    perSeason.push(clamp((baseSeasonWinPct * decay) / 100, 0.001, 0.35));
-  }
+  const perSeason = buildCareerSeasonCurve(
+    baseSeasonWinPct,
+    yearsRemaining,
+    localHints.yearsExp,
+    posGroup
+  );
 
   const probAtLeast = poibinAtLeastK(perSeason, intent.wins) * 100;
   const capped = Math.min(probAtLeast, historicalCapForSuperBowls(posGroup, intent.wins, localHints.yearsExp));
@@ -1459,7 +1479,7 @@ async function estimateCareerSuperBowlOdds(prompt, playerName, localPlayerStatus
 }
 
 function parseMvpIntent(prompt) {
-  const lower = normalizePrompt(prompt);
+  const lower = normalizePrompt(numberWordsToDigits(prompt));
   if (!/\b(mvp|most valuable player)\b/.test(lower)) return null;
   const m = lower.match(/\b(win|wins|won|to win)\s+(\d+)\s+(mvp|most valuable player)\b/);
   const count = m ? Number(m[2]) : 1;

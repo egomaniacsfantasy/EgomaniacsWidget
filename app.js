@@ -326,6 +326,7 @@ function setupExampleChips() {
     chip.addEventListener("click", () => {
       scenarioInput.value = chip.textContent.trim();
       scenarioInput.focus();
+      form.requestSubmit();
     });
   });
 }

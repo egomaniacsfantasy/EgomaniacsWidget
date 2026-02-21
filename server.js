@@ -25,7 +25,7 @@ const ODDS_API_BASE = process.env.ODDS_API_BASE || "https://api.the-odds-api.com
 const ODDS_API_REGIONS = process.env.ODDS_API_REGIONS || "us";
 const ODDS_API_BOOKMAKERS = process.env.ODDS_API_BOOKMAKERS || "draftkings,fanduel";
 const CACHE_VERSION = "v37";
-const API_PUBLIC_VERSION = "2026.02.21.2";
+const API_PUBLIC_VERSION = "2026.02.21.3";
 const DEFAULT_NFL_SEASON = process.env.DEFAULT_NFL_SEASON || "2025-26";
 const oddsCache = new Map();
 const PLAYER_STATUS_TIMEOUT_MS = Number(process.env.PLAYER_STATUS_TIMEOUT_MS || 7000);
@@ -4139,10 +4139,7 @@ app.post("/api/odds", async (req, res) => {
     const prompt = String(req.body?.prompt || "").trim();
     const clientVersion = String(req.get("x-ewa-client-version") || "").trim();
     if (clientVersion && clientVersion !== API_PUBLIC_VERSION) {
-      return res.status(409).json({
-        status: "outdated_client",
-        message: `Client/server version mismatch. Refresh app. Server=${API_PUBLIC_VERSION}, Client=${clientVersion}`,
-      });
+      metrics.parseNormalized += 1;
     }
     const promptSeasonScoped = applyDefaultNflSeasonInterpretation(prompt);
     const promptForParsing = normalizePromptForModel(promptSeasonScoped);

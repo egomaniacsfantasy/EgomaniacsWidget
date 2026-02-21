@@ -1,0 +1,19 @@
+{
+  "name": "egomaniacs-odds-widget",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "phase2:rebuild": "node scripts/rebuild-phase2-calibration.mjs",
+    "data:qb": "node scripts/build-qb-season-stats.mjs",
+    "data:skill": "node scripts/build-skill-season-stats.mjs",
+    "test:regression": "node scripts/regression-check.mjs",
+    "test:golden": "node scripts/regression-golden.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "openai": "^4.104.0"
+  }
+}

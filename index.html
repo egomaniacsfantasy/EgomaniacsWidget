@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Egomaniacs Fantasy Football | What Are the Odds?</title>
+    <meta
+      name="description"
+      content="What Are the Odds? by Egomaniacs Fantasy Football. Instant hypothetical American odds estimates for sports scenarios."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-shape bg-shape-top" aria-hidden="true"></div>
+    <div class="bg-shape bg-shape-bottom" aria-hidden="true"></div>
+
+    <main class="app-shell">
+      <header class="brand">
+        <p class="brand-kicker">Egomaniacs Fantasy Football</p>
+        <h1>What Are the Odds?</h1>
+        <p class="brand-subtitle">
+          Hypothetical sports probability estimates in American odds format.
+        </p>
+      </header>
+
+      <section class="widget" aria-label="What Are the Odds widget">
+        <form id="odds-form" novalidate>
+          <label for="scenario-input" class="prompt-label">What are the odds that...</label>
+          <div class="input-row">
+            <textarea
+              id="scenario-input"
+              name="scenario"
+              rows="1"
+              maxlength="220"
+              placeholder="Drake Maye wins 2 Super Bowls"
+              required
+            ></textarea>
+            <button id="submit-btn" type="submit">Estimate</button>
+          </div>
+        </form>
+
+        <article id="result-card" class="result-card hidden" aria-live="polite">
+          <div class="result-topline">
+            <p id="result-type-label" class="result-label">Estimated Odds</p>
+            <button id="copy-btn" class="ghost-btn" type="button">Copy</button>
+          </div>
+          <p id="odds-output" class="odds-output">+400</p>
+
+          <div id="player-headshot-wrap" class="player-headshot-wrap">
+            <div id="player-headshot-cluster" class="player-headshot-cluster hidden">
+              <img id="player-headshot" class="player-headshot" alt="" loading="lazy" />
+              <img id="player-headshot-secondary" class="player-headshot player-headshot-secondary hidden" alt="" loading="lazy" />
+            </div>
+            <p id="prompt-summary" class="prompt-summary"></p>
+          </div>
+
+          <div class="meta-grid">
+            <div>
+              <p class="meta-label">Implied Probability</p>
+              <p id="probability-output" class="meta-value">20.0%</p>
+            </div>
+          </div>
+          <p id="source-line" class="source-line hidden"></p>
+          <p id="freshness-line" class="freshness-line hidden"></p>
+
+          <p id="disclaimer" class="disclaimer">
+            Hypothetical estimate for entertainment - not betting advice.
+          </p>
+        </article>
+
+        <article id="refusal-card" class="result-card refusal hidden" aria-live="polite">
+          <p id="refusal-title" class="result-label">This tool can’t help with betting picks.</p>
+          <p id="refusal-copy" class="refusal-copy">
+            What Are the Odds? provides hypothetical entertainment estimates only. It does not provide sportsbook lines or betting advice.
+          </p>
+          <p id="refusal-hint" class="disclaimer">Try a sports hypothetical instead.</p>
+        </article>
+
+        <p id="status-line" class="status-line" aria-live="polite"></p>
+
+        <div class="examples">
+          <p class="examples-label">Try one:</p>
+          <button type="button" class="example-chip">Patriots win the Super Bowl next season</button>
+          <button type="button" class="example-chip">Josh Allen wins MVP next year</button>
+          <button type="button" class="example-chip">A team goes 0-17</button>
+        </div>
+      </section>
+
+      <footer class="site-footer">
+        <p>Built for entertainment scenarios and fan discussion.</p>
+        <p>Egomaniacs Fantasy Football</p>
+      </footer>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -89,7 +89,10 @@ export function detectBaselineEvent(prompt) {
   }
 
   // Rare-event library can be expanded over time.
-  if (/\b17-0\b/.test(p) && /\bnfl\b/.test(p) && /\b(regular season|this nfl season|nfl season)\b/.test(p)) {
+  const hasNflSeasonContext = /\bnfl\b/.test(p) || /\b(0-17|17-0)\b/.test(p);
+  const hasSeasonContext = /\b(regular season|this nfl season|nfl season|this season|season)\b/.test(p);
+
+  if (/\b17-0\b/.test(p) && hasNflSeasonContext && hasSeasonContext) {
     return {
       key: "nfl_team_17_0_regular",
       seasonProbabilityPct: 0.35,
@@ -100,7 +103,7 @@ export function detectBaselineEvent(prompt) {
     };
   }
 
-  if (/\b0-17\b/.test(p) && /\bnfl\b/.test(p) && /\b(regular season|this nfl season|nfl season)\b/.test(p)) {
+  if (/\b0-17\b/.test(p) && hasNflSeasonContext && hasSeasonContext) {
     return {
       key: "nfl_team_0_17_regular",
       seasonProbabilityPct: 1.2,

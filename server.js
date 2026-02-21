@@ -158,6 +158,8 @@ const COMMON_NON_NAME_PHRASES = new Set([
   "this year",
   "hall of",
   "of fame",
+  "a team",
+  "team goes",
 ]);
 const NON_NAME_TOKENS = new Set([
   "what",
@@ -437,13 +439,59 @@ function buildGibberishSnarkResponse() {
   };
 }
 
-function buildNonsenseSportsSnarkResponse(playerOrTeam) {
+function buildNonsenseSportsSnarkResponse(playerOrTeam, prompt = "") {
+  if (prompt) {
+    const offTopic = buildOffTopicSnarkResponse(prompt);
+    if (offTopic?.title !== "Nice Try." || /\b(cocaine|snort|drug|rehab|dating|married|jail|arrest|crime)\b/.test(normalizePrompt(prompt))) {
+      return offTopic;
+    }
+  }
   const label = playerOrTeam || "that";
   return {
     status: "snark",
     title: "Need A Scenario.",
     message: `You gave me ${label}, but not an actual outcome to price.`,
     hint: "Try something measurable: wins MVP, throws 30 TDs, makes playoffs, wins Super Bowl, etc.",
+  };
+}
+
+function buildOffTopicSnarkResponse(prompt) {
+  const lower = normalizePrompt(prompt);
+  const topic = [
+    {
+      re: /\b(cocaine|snort|drug|drugs|rehab|overdose|meth|heroin|substance)\b/,
+      title: "Wrong Playbook.",
+      message: "I price sports outcomes, not personal-life interventions.",
+      hint: "Try a game, season, or career sports scenario.",
+    },
+    {
+      re: /\b(dating|girlfriend|boyfriend|marry|married|divorce|relationship|hook up)\b/,
+      title: "Not That Kind Of Odds.",
+      message: "I’m built for sports hypotheticals, not relationship forecasts.",
+      hint: "Try a player/team outcome instead.",
+    },
+    {
+      re: /\b(jail|arrest|crime|lawsuit|court|prison)\b/,
+      title: "Out Of Scope.",
+      message: "I’m not a legal drama predictor. I only price sports hypotheticals.",
+      hint: "Try awards, playoffs, or stat milestones.",
+    },
+  ].find((x) => x.re.test(lower));
+
+  if (topic) {
+    return {
+      status: "snark",
+      title: topic.title,
+      message: topic.message,
+      hint: topic.hint,
+    };
+  }
+
+  return {
+    status: "snark",
+    title: "Nice Try.",
+    message: "I’m an odds widget for sports scenarios, not random life hypotheticals.",
+    hint: "Try a player, team, or league outcome.",
   };
 }
 
@@ -650,7 +698,7 @@ function hasExplicitSeasonYear(prompt) {
 
 function hasNflContext(prompt) {
   const lower = normalizePrompt(prompt);
-  return /\b(nfl|super bowl|afc|nfc|playoffs?|mvp|qb|quarterback|touchdowns?|tds?|interceptions?|ints?|patriots|chiefs|bills|jets|dolphins|ravens|49ers|packers|cowboys|eagles|seahawks|bengals|steelers|texans)\b/.test(
+  return /\b(nfl|super bowl|afc|nfc|playoffs?|mvp|qb|quarterback|touchdowns?|tds?|interceptions?|ints?|0-17|17-0|patriots|chiefs|bills|jets|dolphins|ravens|49ers|packers|cowboys|eagles|seahawks|bengals|steelers|texans)\b/.test(
     lower
   );
 }
@@ -2762,6 +2810,19 @@ function parseCombinedPassingTdIntent(prompt) {
   return { threshold };
 }
 
+function parseCombinedPassingYardsIntent(prompt) {
+  const p = normalizePrompt(prompt);
+  if (!/\b(and|combine|combined|together)\b/.test(p)) return null;
+  const m =
+    p.match(/\bcombine(?:d)?\s+for\s+(\d{3,5})\s+(?:total\s+)?(?:(pass(?:ing)?\s+)?)?(?:yds?|yards?)\b/) ||
+    p.match(/\btogether\s+for\s+(\d{3,5})\s+(?:(pass(?:ing)?\s+)?)?(?:yds?|yards?)\b/);
+  if (!m) return null;
+  const threshold = Number(m[1]);
+  if (!Number.isFinite(threshold) || threshold < 100) return null;
+  const explicitPassing = /\bpass/.test(m[0] || "");
+  return { threshold, explicitPassing };
+}
+
 function poissonTailAtLeast(lambda, threshold) {
   const k = Math.max(0, Math.floor(Number(threshold || 0)));
   if (!Number.isFinite(lambda) || lambda <= 0) return 0;
@@ -2774,6 +2835,21 @@ function poissonTailAtLeast(lambda, threshold) {
   return clamp(1 - cdf, 0, 1);
 }
 
+function erfApprox(x) {
+  const sign = x < 0 ? -1 : 1;
+  const ax = Math.abs(x);
+  const t = 1 / (1 + 0.3275911 * ax);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t) * Math.exp(-ax * ax);
+  return sign * y;
+}
+
+function normalTailAtLeast(mean, sigma, threshold) {
+  const sd = Math.max(1, Number(sigma) || 1);
+  const z = (Number(threshold || 0) - 0.5 - Number(mean || 0)) / (sd * Math.sqrt(2));
+  const cdf = 0.5 * (1 + erfApprox(z));
+  return clamp(1 - cdf, 0, 1);
+}
+
 function qbTierFromName(name) {
   const n = normalizePersonName(name);
   if (["patrick mahomes", "josh allen", "joe burrow", "lamar jackson"].includes(n)) return "elite";
@@ -2782,9 +2858,15 @@ function qbTierFromName(name) {
   return "default";
 }
 
-function passingTdMeanForProfile(profile) {
+function inferIsQbProfile(profile) {
   const pos = String(profile?.position || "").toUpperCase();
-  if (pos !== "QB") return 0.35;
+  if (pos === "QB") return true;
+  const tier = qbTierFromName(profile?.name || "");
+  return tier !== "default";
+}
+
+function passingTdMeanForProfile(profile) {
+  if (!inferIsQbProfile(profile)) return 0.35;
   const tier = qbTierFromName(profile?.name || "");
   const tierMeans = {
     elite: 34,
@@ -2797,6 +2879,28 @@ function passingTdMeanForProfile(profile) {
   if (Number.isFinite(yearsExp) && yearsExp <= 1) lambda *= 0.9;
   if (Number.isFinite(yearsExp) && yearsExp >= 8) lambda *= 0.95;
   return clamp(lambda, 0.2, 45);
+}
+
+function passingYardsMeanForProfile(profile) {
+  if (!inferIsQbProfile(profile)) return 35;
+  const tier = qbTierFromName(profile?.name || "");
+  const tierMeans = {
+    elite: 4300,
+    high: 3900,
+    young: 3400,
+    default: 3600,
+  };
+  let mu = Number(tierMeans[tier] ?? tierMeans.default);
+  const yearsExp = Number(profile?.yearsExp || 0);
+  if (Number.isFinite(yearsExp) && yearsExp <= 1) mu *= 0.88;
+  if (Number.isFinite(yearsExp) && yearsExp >= 9) mu *= 0.94;
+  return clamp(mu, 80, 5600);
+}
+
+function passingYardsSigmaForProfile(profile, mean) {
+  if (!inferIsQbProfile(profile)) return 65;
+  const mu = Number(mean || passingYardsMeanForProfile(profile));
+  return clamp(Math.sqrt((0.23 * mu) ** 2 + 320 ** 2), 420, 1600);
 }
 
 function shortNameLabel(name) {
@@ -2839,6 +2943,53 @@ function buildCombinedPassingTdEstimate(prompt, combinedIntent, profiles, asOfDa
       baselineEventKey: "nfl_two_player_combined_passing_tds_threshold",
       threshold,
       lambda,
+      players: [a?.name || "", b?.name || ""],
+    },
+  };
+}
+
+function buildCombinedPassingYardsEstimate(prompt, combinedIntent, profiles, asOfDate) {
+  if (!combinedIntent || !Array.isArray(profiles) || profiles.length < 2) return null;
+  const [a, b] = profiles;
+  const threshold = combinedIntent.threshold;
+
+  const aMean = passingYardsMeanForProfile(a);
+  const bMean = passingYardsMeanForProfile(b);
+  const aSigma = passingYardsSigmaForProfile(a, aMean);
+  const bSigma = passingYardsSigmaForProfile(b, bMean);
+  const mean = aMean + bMean;
+  const sigma = Math.sqrt(aSigma * aSigma + bSigma * bSigma);
+
+  const aIsQb = inferIsQbProfile(a);
+  const bIsQb = inferIsQbProfile(b);
+  if (!combinedIntent.explicitPassing && !(aIsQb && bIsQb)) return null;
+
+  let probabilityPct = normalTailAtLeast(mean, sigma, threshold) * 100;
+  if (aIsQb && bIsQb && threshold <= 6000) probabilityPct = Math.max(probabilityPct, 92);
+  if (aIsQb && bIsQb && threshold <= 7000) probabilityPct = Math.max(probabilityPct, 78);
+  probabilityPct = clamp(probabilityPct, 0.1, 99.9);
+
+  return {
+    status: "ok",
+    odds: toAmericanOdds(probabilityPct),
+    impliedProbability: `${probabilityPct.toFixed(1)}%`,
+    confidence: "High",
+    assumptions: [
+      "Deterministic two-player season passing yards model used.",
+      "Player-specific passing-yard means and variance drive combined distribution.",
+    ],
+    playerName: a?.name || null,
+    headshotUrl: null,
+    summaryLabel: `${shortNameLabel(a?.name)} + ${shortNameLabel(b?.name)} combine for ${threshold} pass yds`,
+    liveChecked: false,
+    asOfDate: asOfDate || new Date().toISOString().slice(0, 10),
+    sourceType: "historical_model",
+    sourceLabel: "Two-player passing yards baseline model",
+    trace: {
+      baselineEventKey: "nfl_two_player_combined_passing_yards_threshold",
+      threshold,
+      mean,
+      sigma,
       players: [a?.name || "", b?.name || ""],
     },
   };
@@ -2938,7 +3089,13 @@ function buildComebackSnarkResponse(player) {
   };
 }
 
-function buildNonSportsPersonSnarkResponse(player) {
+function buildNonSportsPersonSnarkResponse(player, prompt = "") {
+  if (prompt) {
+    const offTopic = buildOffTopicSnarkResponse(prompt);
+    if (offTopic?.title !== "Nice Try." || /\b(cocaine|snort|drug|rehab|dating|jail|arrest|crime)\b/.test(normalizePrompt(prompt))) {
+      return offTopic;
+    }
+  }
   const label = player || "That person";
   return {
     status: "snark",
@@ -3912,11 +4069,8 @@ app.post("/api/odds", async (req, res) => {
     }
 
     if (/\b(my friend|my buddy|my cousin|my brother|my sister|my dad|my mom|my uncle|my aunt)\b/i.test(promptForParsing)) {
-      metrics.refusals += 1;
-      return res.json({
-        status: "refused",
-        message: "Use a real player, team, or league scenario. Personal contacts are out of scope for this tool.",
-      });
+      metrics.snarks += 1;
+      return res.json(buildOffTopicSnarkResponse(promptForParsing));
     }
 
     const impossibleReason = hardImpossibleReason(promptForParsing);
@@ -3966,16 +4120,12 @@ app.post("/api/odds", async (req, res) => {
     if ((playerHint || teamHint || isSportsPrompt(promptForParsing)) && !hasMeasurableOutcomeIntent(promptForParsing)) {
       metrics.snarks += 1;
       const label = playerHint || teamHint || "that";
-      return res.json(buildNonsenseSportsSnarkResponse(label));
+      return res.json(buildNonsenseSportsSnarkResponse(label, promptForParsing));
     }
 
     if (!isSportsPrompt(promptForParsing) && !isLikelySportsHypothetical(promptForParsing)) {
-      metrics.refusals += 1;
-      return res.json({
-        status: "refused",
-        message:
-          "What Are the Odds? is for sports hypotheticals only. Try a sports scenario like 'Team X wins the championship next season.'",
-      });
+      metrics.snarks += 1;
+      return res.json(buildOffTopicSnarkResponse(promptForParsing));
     }
 
     if (!process.env.OPENAI_API_KEY) {
@@ -3999,6 +4149,47 @@ app.post("/api/odds", async (req, res) => {
           const base = buildCombinedPassingTdEstimate(
             promptForParsing,
             combinedPassingIntent,
+            profiles.slice(0, 2),
+            new Date().toISOString().slice(0, 10)
+          );
+          if (base) {
+            let value = await enrichEntityMedia(
+              promptForParsing,
+              base,
+              profiles[0].name,
+              "",
+              {
+                preferredTeamAbbr: profiles[0].teamAbbr || "",
+                preferActive: true,
+              }
+            );
+            value = applyConsistencyAndTrack({ prompt: promptForParsing, intent, result: value });
+            value = decorateForScenarioComplexity(value, conditionalIntent, jointEventIntent);
+            if (FEATURE_ENABLE_TRACE) {
+              value.trace = { ...(value.trace || {}), intent, canonicalPromptKey: semanticKey, apiVersion: API_PUBLIC_VERSION };
+            }
+            metrics.baselineServed += 1;
+            oddsCache.set(normalizedPrompt, { ts: Date.now(), value });
+            semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value });
+            return res.json(value);
+          }
+        }
+      }
+    }
+
+    const combinedPassingYardsIntent = parseCombinedPassingYardsIntent(promptForParsing);
+    if (combinedPassingYardsIntent) {
+      const named = await extractKnownNflNamesFromPrompt(promptForParsing, 3);
+      if (named.length >= 2) {
+        const profiles = (
+          await Promise.all(
+            named.slice(0, 2).map((n) => resolveNflPlayerProfile(n.name, targetNflTeamAbbr || ""))
+          )
+        ).filter(Boolean);
+        if (profiles.length >= 2) {
+          const base = buildCombinedPassingYardsEstimate(
+            promptForParsing,
+            combinedPassingYardsIntent,
             profiles.slice(0, 2),
             new Date().toISOString().slice(0, 10)
           );
@@ -4380,7 +4571,7 @@ app.post("/api/odds", async (req, res) => {
             unclear &&
             !strongSports))
         ) {
-          const value = buildNonSportsPersonSnarkResponse(resolvedPlayerHint || playerHint);
+          const value = buildNonSportsPersonSnarkResponse(resolvedPlayerHint || playerHint, promptForParsing);
           metrics.snarks += 1;
           oddsCache.set(normalizedPrompt, { ts: Date.now(), value });
           return res.json(value);
@@ -4627,7 +4818,7 @@ app.post("/api/odds", async (req, res) => {
           return res.json(value);
         }
         if (playerHint && !teamHint && !hasStrongSportsContext(promptForParsing) && !explicitNonNfl) {
-          const value = buildNonSportsPersonSnarkResponse(playerHint);
+          const value = buildNonSportsPersonSnarkResponse(playerHint, promptForParsing);
           metrics.snarks += 1;
           oddsCache.set(normalizedPrompt, { ts: Date.now(), value });
           return res.json(value);
@@ -4677,7 +4868,7 @@ app.post("/api/odds", async (req, res) => {
         return res.json(value);
       }
       if (playerHint && !teamHint && !hasStrongSportsContext(promptForParsing) && !explicitNonNfl) {
-        const value = buildNonSportsPersonSnarkResponse(playerHint);
+        const value = buildNonSportsPersonSnarkResponse(playerHint, promptForParsing);
         metrics.snarks += 1;
         oddsCache.set(normalizedPrompt, { ts: Date.now(), value });
         return res.json(value);

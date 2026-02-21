@@ -24,8 +24,8 @@ const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
 const ODDS_API_BASE = process.env.ODDS_API_BASE || "https://api.the-odds-api.com";
 const ODDS_API_REGIONS = process.env.ODDS_API_REGIONS || "us";
 const ODDS_API_BOOKMAKERS = process.env.ODDS_API_BOOKMAKERS || "draftkings,fanduel";
-const CACHE_VERSION = "v35";
-const API_PUBLIC_VERSION = "2026.02.20.1";
+const CACHE_VERSION = "v37";
+const API_PUBLIC_VERSION = "2026.02.21.2";
 const DEFAULT_NFL_SEASON = process.env.DEFAULT_NFL_SEASON || "2025-26";
 const oddsCache = new Map();
 const PLAYER_STATUS_TIMEOUT_MS = Number(process.env.PLAYER_STATUS_TIMEOUT_MS || 7000);
@@ -131,6 +131,9 @@ const SPORTS_PATTERNS = [
 const PLAYER_ALIASES = {
   "drake may": "Drake Maye",
   "caleb": "Caleb Williams",
+  "amon ra": "Amon-Ra St. Brown",
+  "amon ra st brown": "Amon-Ra St. Brown",
+  "amon-ra st brown": "Amon-Ra St. Brown",
 };
 const TEAM_TEXT_ALIASES = {
   niners: "49ers",
@@ -624,7 +627,7 @@ async function extractKnownNflNamesFromPrompt(prompt, maxNames = 3) {
   const tokens = normalizeEntityName(prompt).split(" ").filter(Boolean);
   const hits = [];
   const seen = new Set();
-  for (let n = 3; n >= 2; n -= 1) {
+  for (let n = Math.min(5, tokens.length); n >= 2; n -= 1) {
     for (let i = 0; i <= tokens.length - n; i += 1) {
       const phrase = tokens.slice(i, i + n).join(" ");
       const key = normalizePersonName(phrase);
@@ -801,7 +804,7 @@ function normalizePromptForModel(prompt) {
 function normalizePersonName(name) {
   return String(name || "")
     .toLowerCase()
-    .replace(/[.,']/g, "")
+    .replace(/[.,'\-]/g, " ")
     .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -905,10 +908,20 @@ function parseNflDivisionMarket(lowerPrompt) {
 function parseMultiYearWindow(prompt) {
   const lower = normalizePrompt(numberWordsToDigits(prompt));
   const m = lower.match(/\b(next|over|within)\s+(\d{1,2})\s+(years|seasons)\b/);
-  if (!m) return null;
-  const years = Number(m[2]);
-  if (!Number.isFinite(years) || years <= 1 || years > 20) return null;
-  return years;
+  if (m) {
+    const years = Number(m[2]);
+    if (!Number.isFinite(years) || years <= 1 || years > 20) return null;
+    return years;
+  }
+  const byYear = lower.match(/\bbefore\s+(20\d{2})\b/);
+  if (byYear) {
+    const targetYear = Number(byYear[1]);
+    const currentYear = new Date().getUTCFullYear();
+    const years = targetYear - currentYear;
+    if (!Number.isFinite(years) || years <= 0 || years > 25) return null;
+    return years;
+  }
+  return null;
 }
 
 function titleCaseWords(text) {
@@ -933,7 +946,9 @@ function extractKnownTeamTokens(prompt, maxTeams = 3) {
     const re = new RegExp(`\\b${alias.replace(/\s+/g, "\\s+")}\\b`, "i");
     const m = text.match(re);
     if (!m) continue;
-    const token = normalizeTeamToken(alias);
+    const abbr = NFL_TEAM_ALIASES[alias] || extractNflTeamAbbr(alias);
+    const canonical = abbr ? (NFL_TEAM_DISPLAY[abbr] || alias) : alias;
+    const token = normalizeTeamToken(canonical);
     if (!token) continue;
     matches.push({
       token,
@@ -955,6 +970,7 @@ function extractKnownTeamTokens(prompt, maxTeams = 3) {
 function parseBeforeOtherTeamIntent(prompt) {
   const lower = normalizePrompt(numberWordsToDigits(prompt));
   if (!/\bbefore\b/.test(lower)) return null;
+  if (/\bbefore\s+20\d{2}\b/.test(lower)) return null;
   let market = "";
   if (/\bsuper bowl\b|\bsb\b/.test(lower)) market = "super_bowl_winner";
   else if (/\bafc\b/.test(lower)) market = "afc_winner";
@@ -3510,7 +3526,8 @@ function extractPlayerName(prompt) {
   const tokens = normalizeEntityName(raw).split(" ").filter(Boolean);
   const titleCase = (s) => s.split(" ").map((w) => (w ? `${w[0].toUpperCase()}${w.slice(1)}` : w)).join(" ");
 
-  for (let n = 3; n >= 2; n -= 1) {
+  // First pass: try to resolve known players using longer n-grams first.
+  for (let n = Math.min(5, tokens.length); n >= 2; n -= 1) {
     for (let i = 0; i <= tokens.length - n; i += 1) {
       const phrase = tokens.slice(i, i + n).join(" ");
       if (!phrase) continue;
@@ -3525,8 +3542,19 @@ function extractPlayerName(prompt) {
       if (known?.length) {
         return known[0].fullName || titleCase(phrase);
       }
-      if (n === 2) return titleCase(phrase);
     }
+  }
+
+  // Second pass fallback: return first plausible two-word person-like phrase.
+  for (let i = 0; i <= tokens.length - 2; i += 1) {
+    const phrase = tokens.slice(i, i + 2).join(" ");
+    if (!phrase) continue;
+    if (INVALID_PERSON_PHRASES.has(phrase)) continue;
+    if (COMMON_NON_NAME_PHRASES.has(phrase)) continue;
+    if (KNOWN_TEAMS.some((t) => normalizeEntityName(t) === phrase)) continue;
+    const words = phrase.split(" ");
+    if (words.some((w) => NON_NAME_TOKENS.has(w))) continue;
+    return titleCase(phrase);
   }
   return null;
 }
@@ -3538,7 +3566,7 @@ function extractPlayerNamesFromPrompt(prompt, maxNames = 3) {
   const out = [];
   const seen = new Set();
 
-  for (let n = 3; n >= 2; n -= 1) {
+  for (let n = Math.min(5, tokens.length); n >= 2; n -= 1) {
     for (let i = 0; i <= tokens.length - n; i += 1) {
       const phrase = tokens.slice(i, i + n).join(" ");
       if (!phrase) continue;
@@ -3556,12 +3584,25 @@ function extractPlayerNamesFromPrompt(prompt, maxNames = 3) {
         if (seen.has(canonicalKey)) continue;
         seen.add(canonicalKey);
         out.push(canonical);
-      } else if (n === 2) {
-        seen.add(key);
-        out.push(titleCase(phrase));
-      } else {
-        continue;
       }
+      if (out.length >= maxNames) return out;
+    }
+  }
+
+  // Fallback pass for unknown names when we have no known matches.
+  if (out.length === 0) {
+    for (let i = 0; i <= tokens.length - 2; i += 1) {
+      const phrase = tokens.slice(i, i + 2).join(" ");
+      if (!phrase) continue;
+      if (INVALID_PERSON_PHRASES.has(phrase)) continue;
+      if (COMMON_NON_NAME_PHRASES.has(phrase)) continue;
+      if (KNOWN_TEAMS.some((t) => normalizeEntityName(t) === phrase)) continue;
+      const words = phrase.split(" ");
+      if (words.some((w) => NON_NAME_TOKENS.has(w))) continue;
+      const key = normalizePersonName(phrase);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(titleCase(phrase));
       if (out.length >= maxNames) return out;
     }
   }
@@ -3569,7 +3610,17 @@ function extractPlayerNamesFromPrompt(prompt, maxNames = 3) {
 }
 
 function extractTeamName(prompt) {
-  const found = KNOWN_TEAMS.find((team) => new RegExp(`\\b${team.replace(" ", "\\s+")}\\b`, "i").test(prompt));
+  const text = String(prompt || "");
+  const nflAliasMatches = Object.entries(NFL_TEAM_ALIASES)
+    .map(([alias, abbr]) => ({ alias, abbr }))
+    .filter(({ alias }) => new RegExp(`\\b${alias.replace(/\s+/g, "\\s+")}\\b`, "i").test(text))
+    .sort((a, b) => b.alias.length - a.alias.length);
+  if (nflAliasMatches.length) {
+    const abbr = nflAliasMatches[0].abbr;
+    return NFL_TEAM_DISPLAY[abbr] || nflAliasMatches[0].alias;
+  }
+
+  const found = KNOWN_TEAMS.find((team) => new RegExp(`\\b${team.replace(" ", "\\s+")}\\b`, "i").test(text));
   return found || null;
 }
 
@@ -3910,8 +3961,18 @@ async function lookupTeamLogo(team) {
     if (!response.ok) return null;
 
     const payload = await response.json();
-    const teams = Array.isArray(payload?.teams) ? payload.teams : [];
+    let teams = Array.isArray(payload?.teams) ? payload.teams : [];
     if (teams.length === 0) return null;
+
+    const teamAbbr = extractNflTeamAbbr(team);
+    if (teamAbbr) {
+      const nflOnly = teams.filter((t) => {
+        const sport = String(t?.strSport || "").toLowerCase();
+        const league = String(t?.strLeague || "").toLowerCase();
+        return sport.includes("football") || league.includes("nfl") || league.includes("national football");
+      });
+      if (nflOnly.length) teams = nflOnly;
+    }
 
     const exact = teams.find(
       (t) =>
@@ -4404,6 +4465,13 @@ app.post("/api/odds", async (req, res) => {
         if (fuzzyMatch?.status) {
           localPlayerStatus = fuzzyMatch.status;
           resolvedPlayerHint = fuzzyMatch.matchedName || playerHint;
+        }
+      }
+      if (!localPlayerStatus && hasStrongSportsContext(promptForParsing)) {
+        const inferredFromPrompt = await inferLocalNflPlayerFromPrompt(promptForParsing, targetNflTeamAbbr || "");
+        if (inferredFromPrompt) {
+          resolvedPlayerHint = inferredFromPrompt;
+          localPlayerStatus = await getLocalNflPlayerStatus(inferredFromPrompt, targetNflTeamAbbr || "");
         }
       }
       if (localPlayerStatus && (resolvedPlayerHint || playerHint)) {

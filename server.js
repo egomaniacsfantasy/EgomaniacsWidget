@@ -1510,6 +1510,15 @@ async function estimatePlayerMvpOdds(prompt, intent, playerName, localPlayerStat
   const mvpIntent = parseMvpIntent(prompt);
   if (!mvpIntent || !playerName || !localPlayerStatus) return null;
 
+  const liveMvpRef = await getLiveNflMvpReferenceByWeb(`${prompt} nfl`, playerName);
+  if (liveMvpRef) {
+    return {
+      ...liveMvpRef,
+      playerName,
+      summaryLabel: mvpIntent.count > 1 ? `${playerName} wins ${mvpIntent.count} MVPs` : `${playerName} wins MVP`,
+    };
+  }
+
   const hints = parseLocalIndexNote(localPlayerStatus.note);
   const profile = {
     name: playerName,
@@ -1536,9 +1545,19 @@ async function estimatePlayerMvpOdds(prompt, intent, playerName, localPlayerStat
     if (mvpIntent.count >= 2) {
       return noChanceEstimate(prompt, asOfDate);
     }
-    const years = Math.max(3, estimateCareerYearsRemaining(hints));
-    const seasonPct = clamp((Number(mvp.expectedCount || 0) / years) * 100, 0.1, 80);
-    probabilityPct = seasonPct;
+    const posGroup = positionGroup(profile.position);
+    const exp = Number(profile.yearsExp || 0);
+    const teamSignal = clamp((teamSuperBowlPct || 4.5) * 0.9, 0.8, 14);
+    let tierBoost = 1.0;
+    const key = normalizePersonName(playerName);
+    if (["patrick mahomes"].includes(key)) tierBoost = 1.65;
+    else if (["josh allen", "joe burrow", "lamar jackson"].includes(key)) tierBoost = 1.45;
+    else if (["jalen hurts", "justin herbert", "cj stroud"].includes(key)) tierBoost = 1.25;
+    else if (["drake maye", "caleb williams", "jayden daniels"].includes(key)) tierBoost = 1.12;
+    const expMul = exp <= 0 ? 0.65 : exp === 1 ? 0.82 : exp === 2 ? 1.0 : exp <= 7 ? 1.1 : 0.95;
+    const posMul = posGroup === "qb" ? 1 : posGroup === "rb" || posGroup === "receiver" ? 0.12 : 0.05;
+    const baseline = posGroup === "qb" ? 1.2 : 0.15;
+    probabilityPct = clamp(teamSignal * tierBoost * expMul * posMul + baseline, 0.1, 40);
   } else {
     probabilityPct = probabilityAtLeastFromCountDistribution(mvp.distribution, mvpIntent.count);
   }
@@ -2594,7 +2613,7 @@ async function buildSeasonTeamTitleFallback(prompt, asOfDate) {
 
 function hasNflMvpPrompt(prompt) {
   const lower = normalizePrompt(prompt);
-  return /\b(mvp|most valuable player)\b/.test(lower) && /\b(nfl|football|qb|quarterback)\b/.test(lower);
+  return /\b(mvp|most valuable player)\b/.test(lower);
 }
 
 async function getLiveNflMvpReferenceByWeb(prompt, playerHint = "") {

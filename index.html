@@ -48,7 +48,10 @@
         <article id="result-card" class="result-card hidden" aria-live="polite">
           <div class="result-topline">
             <p id="result-type-label" class="result-label">Estimated Odds</p>
-            <button id="copy-btn" class="ghost-btn" type="button">Copy</button>
+            <div class="result-actions">
+              <button id="share-btn" class="ghost-btn" type="button">Share</button>
+              <button id="copy-btn" class="ghost-btn" type="button">Copy</button>
+            </div>
           </div>
           <p id="odds-output" class="odds-output">+400</p>
 
@@ -73,6 +76,27 @@
             Hypothetical estimate for entertainment - not betting advice.
           </p>
         </article>
+
+        <section id="share-card" class="share-card-capture" aria-hidden="true">
+          <div class="share-card-shell">
+            <p class="share-kicker">EGOMANIACS FANTASY FOOTBALL</p>
+            <h2 class="share-title">What Are the Odds?</h2>
+            <p class="share-subtitle">NFL hypothetical estimate</p>
+            <p id="share-odds-output" class="share-odds">+400</p>
+            <p id="share-summary-output" class="share-summary">Drake Maye wins MVP this season</p>
+            <div class="share-meta">
+              <div>
+                <p class="share-meta-label">Implied Probability</p>
+                <p id="share-probability-output" class="share-meta-value">20.0%</p>
+              </div>
+              <div>
+                <p class="share-meta-label">Source</p>
+                <p id="share-source-output" class="share-meta-value">Hypothetical model</p>
+              </div>
+            </div>
+            <p class="share-disclaimer">Hypothetical estimate for entertainment - not betting advice.</p>
+          </div>
+        </section>
 
         <article id="refusal-card" class="result-card refusal hidden" aria-live="polite">
           <p id="refusal-title" class="result-label">This tool can’t help with betting picks.</p>
@@ -99,6 +123,7 @@
       </footer>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

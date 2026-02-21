@@ -220,6 +220,12 @@ button {
   width: 100%;
 }
 
+.result-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .result-label {
   margin: 0;
   font-size: 0.82rem;
@@ -355,6 +361,107 @@ button {
 
 .ghost-btn:hover {
   background: rgba(255, 255, 255, 0.1);
+}
+
+.share-card-capture {
+  position: fixed;
+  left: -99999px;
+  top: -99999px;
+  width: 720px;
+  padding: 0;
+  margin: 0;
+}
+
+.share-card-shell {
+  width: 720px;
+  min-height: 960px;
+  border-radius: 36px;
+  border: 1px solid rgba(243, 225, 188, 0.24);
+  background:
+    radial-gradient(circle at 14% 8%, rgba(215, 164, 65, 0.35), transparent 35%),
+    radial-gradient(circle at 90% 12%, rgba(184, 68, 32, 0.26), transparent 34%),
+    linear-gradient(160deg, #1d170f 0%, #241b12 50%, #17110a 100%);
+  color: #f3ead6;
+  padding: 48px 50px 44px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  display: flex;
+  flex-direction: column;
+}
+
+.share-kicker {
+  margin: 0;
+  font-size: 0.95rem;
+  letter-spacing: 0.12em;
+  color: #c8b795;
+  text-transform: uppercase;
+}
+
+.share-title {
+  margin: 8px 0 2px;
+  font-family: "Instrument Serif", serif;
+  font-weight: 400;
+  font-size: 4.1rem;
+  line-height: 1;
+  color: #f4ebd9;
+}
+
+.share-subtitle {
+  margin: 0 0 34px;
+  font-size: 1.08rem;
+  color: #d5c5a7;
+}
+
+.share-odds {
+  margin: 0 0 18px;
+  font-size: 7.2rem;
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+  font-weight: 700;
+  color: #f6edd9;
+  text-align: center;
+}
+
+.share-summary {
+  margin: 0 auto 28px;
+  width: 100%;
+  border: 1px solid rgba(243, 225, 188, 0.26);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 16px 20px;
+  text-align: center;
+  font-size: 1.55rem;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #f4ead4;
+}
+
+.share-meta {
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.share-meta-label {
+  margin: 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #c7b79b;
+}
+
+.share-meta-value {
+  margin: 8px 0 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #f2e9d6;
+}
+
+.share-disclaimer {
+  margin: 24px 0 0;
+  text-align: center;
+  font-size: 0.9rem;
+  color: #b9ab92;
 }
 
 .refusal-copy {

@@ -15,9 +15,15 @@ const playerHeadshot = document.getElementById("player-headshot");
 const playerHeadshotSecondary = document.getElementById("player-headshot-secondary");
 const playerHeadshotCluster = document.getElementById("player-headshot-cluster");
 const promptSummary = document.getElementById("prompt-summary");
+const shareBtn = document.getElementById("share-btn");
 const copyBtn = document.getElementById("copy-btn");
 const statusLine = document.getElementById("status-line");
 const examplesWrap = document.querySelector(".examples");
+const shareCard = document.getElementById("share-card");
+const shareOddsOutput = document.getElementById("share-odds-output");
+const shareSummaryOutput = document.getElementById("share-summary-output");
+const shareProbabilityOutput = document.getElementById("share-probability-output");
+const shareSourceOutput = document.getElementById("share-source-output");
 const PLACEHOLDER_ROTATE_MS = 3200;
 const EXAMPLE_REFRESH_MS = 12000;
 const CLIENT_API_VERSION = "2026.02.21.3";
@@ -115,6 +121,27 @@ function renderOddsDisplay(oddsText) {
   oddsOutput.textContent = oddsText;
 }
 
+function formatOddsForShare(oddsText) {
+  const n = parseAmericanOdds(oddsText);
+  if (n !== null && n <= -10000) return "IT'S A LOCK!";
+  if (n !== null && n >= 10000) return "NO SHOT.";
+  return String(oddsText || "");
+}
+
+function syncShareCard(result, prompt) {
+  shareOddsOutput.textContent = formatOddsForShare(result.odds);
+  shareSummaryOutput.textContent = result.summaryLabel || prompt;
+  shareProbabilityOutput.textContent = result.impliedProbability || "";
+
+  if (result.sourceType === "sportsbook" && result.sourceBook) {
+    shareSourceOutput.textContent = `${result.sourceBook} reference`;
+  } else if (result.liveChecked) {
+    shareSourceOutput.textContent = "Live context checked";
+  } else {
+    shareSourceOutput.textContent = "Hypothetical model";
+  }
+}
+
 function showResult(result, prompt) {
   refusalCard.classList.add("hidden");
   resultCard.classList.remove("hidden");
@@ -161,6 +188,8 @@ function showResult(result, prompt) {
   } else {
     clearHeadshot();
   }
+
+  syncShareCard(result, prompt);
 }
 
 function showRefusal(message, options = {}) {
@@ -309,6 +338,63 @@ async function copyCurrentResult() {
   }
 }
 
+async function createShareBlob() {
+  if (!window.html2canvas) {
+    throw new Error("Share renderer unavailable.");
+  }
+  const canvas = await window.html2canvas(shareCard, {
+    backgroundColor: null,
+    scale: 2,
+    useCORS: true,
+    logging: false,
+  });
+
+  return await new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Could not build image."));
+    }, "image/png");
+  });
+}
+
+async function shareCurrentResult() {
+  if (resultCard.classList.contains("hidden")) return;
+
+  const oldText = shareBtn.textContent;
+  shareBtn.disabled = true;
+  shareBtn.textContent = "Preparing...";
+  try {
+    const blob = await createShareBlob();
+    const file = new File([blob], "egomaniacs-odds.png", { type: "image/png" });
+    const shareText = `${promptSummary.textContent} — ${oddsOutput.textContent}`;
+
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: "What Are the Odds?",
+        text: shareText,
+      });
+      statusLine.textContent = "Share card ready. Sent.";
+      return;
+    }
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "egomaniacs-odds.png";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    statusLine.textContent = "Share image downloaded. Send it anywhere.";
+  } catch (_error) {
+    statusLine.textContent = "Could not generate share image right now.";
+  } finally {
+    shareBtn.disabled = false;
+    shareBtn.textContent = oldText;
+  }
+}
+
 function hydrateFromUrl() {
   const url = new URL(window.location.href);
   const q = url.searchParams.get("q");
@@ -426,6 +512,9 @@ async function hydrateLiveSuggestions() {
 
 form.addEventListener("submit", onSubmit);
 copyBtn.addEventListener("click", copyCurrentResult);
+if (shareBtn) {
+  shareBtn.addEventListener("click", shareCurrentResult);
+}
 scenarioInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();

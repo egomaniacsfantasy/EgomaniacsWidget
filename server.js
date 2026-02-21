@@ -1409,14 +1409,19 @@ function numberWordsToDigits(text) {
 
 function parseCareerSuperBowlIntent(prompt) {
   const normalized = numberWordsToDigits(prompt).toLowerCase().replace(/\bto win\b/g, "wins");
-  const withCount = normalized.match(/\b([a-z]+(?:\s+[a-z]+){1,2})\s+wins?\s+(\d+)\s+super\s*bowls?\b/i);
+  const withCount = normalized.match(/\b([a-z]+(?:\s+[a-z]+){1,2})\s+wins?\s+(?:exactly\s+)?(\d+)\s+super\s*bowls?\b/i);
   const singular = normalized.match(/\b([a-z]+(?:\s+[a-z]+){1,2})\s+wins?\s+(?:(?:a|an|one)\s+)?super\s*bowl\b/i);
   if (!withCount && !singular) return null;
   const wins = withCount ? Number(withCount[2]) : 1;
   if (!Number.isFinite(wins) || wins < 1 || wins > 7) return null;
+  const exactBefore = new RegExp(`\\bwins?\\s+exactly\\s+${wins}\\s+super\\s*bowls?\\b`, "i").test(normalized)
+    || new RegExp(`\\bexactly\\s+${wins}\\s+super\\s*bowls?\\b`, "i").test(normalized);
+  const exactAfter = new RegExp(`\\bwins?\\s+${wins}\\s+super\\s*bowls?\\s+exactly\\b`, "i").test(normalized);
+  const exact = Boolean(exactBefore || exactAfter);
   return {
     playerPhrase: withCount?.[1] || singular?.[1] || "",
     wins,
+    exact,
   };
 }
 
@@ -1457,6 +1462,20 @@ function poibinAtLeastK(probabilities, k) {
   let sum = 0;
   for (let j = k; j <= n; j += 1) sum += dp[j];
   return clamp(sum, 0, 1);
+}
+
+function poibinExactlyK(probabilities, k) {
+  const n = probabilities.length;
+  if (k < 0 || k > n) return 0;
+  const dp = new Array(n + 1).fill(0);
+  dp[0] = 1;
+  for (const p of probabilities) {
+    for (let j = n; j >= 1; j -= 1) {
+      dp[j] = dp[j] * (1 - p) + dp[j - 1] * p;
+    }
+    dp[0] *= 1 - p;
+  }
+  return clamp(dp[k] || 0, 0, 1);
 }
 
 function historicalCapForSuperBowls(positionGroupName, winsTarget, yearsExp) {
@@ -1519,9 +1538,10 @@ async function estimateCareerSuperBowlOdds(prompt, playerName, localPlayerStatus
     posGroup
   );
 
-  const probAtLeast = poibinAtLeastK(perSeason, intent.wins) * 100;
-  const capped = Math.min(probAtLeast, historicalCapForSuperBowls(posGroup, intent.wins, localHints.yearsExp));
+  const rawProb = (intent.exact ? poibinExactlyK(perSeason, intent.wins) : poibinAtLeastK(perSeason, intent.wins)) * 100;
+  const capped = Math.min(rawProb, historicalCapForSuperBowls(posGroup, intent.wins, localHints.yearsExp));
   const probabilityPct = clamp(capped, 0.2, 95);
+  const countLabel = intent.exact ? `${intent.wins}` : `${intent.wins}+`;
   return {
     status: "ok",
     odds: toAmericanOdds(probabilityPct),
@@ -1530,11 +1550,11 @@ async function estimateCareerSuperBowlOdds(prompt, playerName, localPlayerStatus
     assumptions: [
       `${teamName} current Super Bowl reference used as base (${sbRef?.odds || "market unavailable"}).`,
       `Career window modeled over ~${yearsRemaining} seasons with NFL parity decay.`,
-      `Historical cap applied for ${intent.wins}+ Super Bowl wins by ${posGroup.toUpperCase()} careers.`,
+      `Historical cap applied for ${countLabel} Super Bowl wins by ${posGroup.toUpperCase()} careers.`,
     ],
     playerName: null,
     headshotUrl: null,
-    summaryLabel: `${playerName} wins ${intent.wins} Super Bowls`,
+    summaryLabel: intent.exact ? `${playerName} wins exactly ${intent.wins} Super Bowls` : `${playerName} wins ${intent.wins}+ Super Bowls`,
     liveChecked: Boolean(sbRef),
     asOfDate: sbRef?.asOfDate || new Date().toISOString().slice(0, 10),
     sourceType: sbRef ? "hybrid_anchored" : "hypothetical",
@@ -1545,10 +1565,14 @@ async function estimateCareerSuperBowlOdds(prompt, playerName, localPlayerStatus
 function parseMvpIntent(prompt) {
   const lower = normalizePrompt(numberWordsToDigits(prompt));
   if (!/\b(mvp|most valuable player)\b/.test(lower)) return null;
-  const m = lower.match(/\b(win|wins|won|to win)\s+(\d+)\s+(mvp|most valuable player)\b/);
+  const m = lower.match(/\b(win|wins|won|to win)\s+(?:exactly\s+)?(\d+)\s+(mvp|most valuable player)s?\b/);
   const count = m ? Number(m[2]) : 1;
   if (!Number.isFinite(count) || count < 1 || count > 8) return null;
-  return { count };
+  const exactBefore = new RegExp(`\\b(win|wins|won|to win)\\s+exactly\\s+${count}\\s+(mvp|most valuable player)s?\\b`, "i").test(lower)
+    || new RegExp(`\\bexactly\\s+${count}\\s+(mvp|most valuable player)s?\\b`, "i").test(lower);
+  const exactAfter = new RegExp(`\\b(win|wins|won)\\s+${count}\\s+(mvp|most valuable player)s?\\s+exactly\\b`, "i").test(lower);
+  const exact = Boolean(exactBefore || exactAfter);
+  return { count, exact };
 }
 
 function probabilityAtLeastFromCountDistribution(distribution, threshold) {
@@ -1576,10 +1600,13 @@ async function estimatePlayerMvpOdds(prompt, intent, playerName, localPlayerStat
 
   const liveMvpRef = await getLiveNflMvpReferenceByWeb(`${prompt} nfl`, playerName);
   if (liveMvpRef) {
+    const label = mvpIntent.count > 1
+      ? (mvpIntent.exact ? `${playerName} wins exactly ${mvpIntent.count} MVPs` : `${playerName} wins ${mvpIntent.count}+ MVPs`)
+      : `${playerName} wins MVP`;
     return {
       ...liveMvpRef,
       playerName,
-      summaryLabel: mvpIntent.count > 1 ? `${playerName} wins ${mvpIntent.count} MVPs` : `${playerName} wins MVP`,
+      summaryLabel: label,
     };
   }
 
@@ -1623,9 +1650,20 @@ async function estimatePlayerMvpOdds(prompt, intent, playerName, localPlayerStat
     const baseline = posGroup === "qb" ? 1.2 : 0.15;
     probabilityPct = clamp(teamSignal * tierBoost * expMul * posMul + baseline, 0.1, 40);
   } else {
-    probabilityPct = probabilityAtLeastFromCountDistribution(mvp.distribution, mvpIntent.count);
+    if (mvpIntent.exact) {
+      const exactRow = Array.isArray(mvp.distribution)
+        ? mvp.distribution.find((row) => typeof row?.count === "number" && row.count === mvpIntent.count)
+        : null;
+      probabilityPct = Number(exactRow?.probabilityPct || 0);
+      if (!Number.isFinite(probabilityPct) || probabilityPct <= 0) probabilityPct = 0.01;
+    } else {
+      probabilityPct = probabilityAtLeastFromCountDistribution(mvp.distribution, mvpIntent.count);
+    }
   }
   if (!Number.isFinite(probabilityPct)) return null;
+  const mvpLabel = mvpIntent.count > 1
+    ? (mvpIntent.exact ? `${playerName} wins exactly ${mvpIntent.count} MVPs` : `${playerName} wins ${mvpIntent.count}+ MVPs`)
+    : `${playerName} wins MVP`;
 
   return {
     status: "ok",
@@ -1638,7 +1676,7 @@ async function estimatePlayerMvpOdds(prompt, intent, playerName, localPlayerStat
     ],
     playerName,
     headshotUrl: null,
-    summaryLabel: mvpIntent.count > 1 ? `${playerName} wins ${mvpIntent.count} MVPs` : `${playerName} wins MVP`,
+    summaryLabel: mvpLabel,
     liveChecked: Boolean(sbRef),
     asOfDate,
     sourceType: sbRef ? "hybrid_anchored" : "historical_model",
@@ -1646,6 +1684,7 @@ async function estimatePlayerMvpOdds(prompt, intent, playerName, localPlayerStat
     trace: {
       award: "mvp",
       countTarget: mvpIntent.count,
+      countMode: mvpIntent.exact ? "exact" : "at_least",
       horizon: intent?.horizon || "unspecified",
       expectedCountCareer: mvp.expectedCount,
     },

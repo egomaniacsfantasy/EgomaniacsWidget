@@ -26,7 +26,7 @@ const shareProbabilityOutput = document.getElementById("share-probability-output
 const shareSourceOutput = document.getElementById("share-source-output");
 const PLACEHOLDER_ROTATE_MS = 3200;
 const EXAMPLE_REFRESH_MS = 12000;
-const CLIENT_API_VERSION = "2026.02.21.3";
+const CLIENT_API_VERSION = "2026.02.21.4";
 
 const DEFAULT_EXAMPLE_POOL = [
   "Josh Allen throws 30 touchdowns this season",

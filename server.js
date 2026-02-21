@@ -24,8 +24,8 @@ const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
 const ODDS_API_BASE = process.env.ODDS_API_BASE || "https://api.the-odds-api.com";
 const ODDS_API_REGIONS = process.env.ODDS_API_REGIONS || "us";
 const ODDS_API_BOOKMAKERS = process.env.ODDS_API_BOOKMAKERS || "draftkings,fanduel";
-const CACHE_VERSION = "v37";
-const API_PUBLIC_VERSION = "2026.02.21.3";
+const CACHE_VERSION = "v38";
+const API_PUBLIC_VERSION = "2026.02.21.4";
 const DEFAULT_NFL_SEASON = process.env.DEFAULT_NFL_SEASON || "2025-26";
 const oddsCache = new Map();
 const PLAYER_STATUS_TIMEOUT_MS = Number(process.env.PLAYER_STATUS_TIMEOUT_MS || 7000);
@@ -913,9 +913,9 @@ function parseMultiYearWindow(prompt) {
     if (!Number.isFinite(years) || years <= 1 || years > 20) return null;
     return years;
   }
-  const byYear = lower.match(/\bbefore\s+(20\d{2})\b/);
+  const byYear = lower.match(/\b(before|by|through|thru|until|up to)\s+(20\d{2})\b/);
   if (byYear) {
-    const targetYear = Number(byYear[1]);
+    const targetYear = Number(byYear[2]);
     const currentYear = new Date().getUTCFullYear();
     const years = targetYear - currentYear;
     if (!Number.isFinite(years) || years <= 0 || years > 25) return null;

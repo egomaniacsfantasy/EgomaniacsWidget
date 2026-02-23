@@ -1,5 +1,6 @@
 const form = document.getElementById("odds-form");
 const scenarioInput = document.getElementById("scenario-input");
+const flipBtn = document.getElementById("flip-btn");
 const submitBtn = document.getElementById("submit-btn");
 const resultCard = document.getElementById("result-card");
 const refusalCard = document.getElementById("refusal-card");
@@ -132,6 +133,56 @@ function setBusy(isBusy) {
   submitBtn.disabled = isBusy;
   submitBtn.textContent = isBusy ? "Estimating..." : "Estimate";
   submitBtn.classList.toggle("is-loading", isBusy);
+  if (flipBtn) {
+    const shouldDisable = isBusy || flipBtn.classList.contains("hidden");
+    flipBtn.disabled = shouldDisable;
+  }
+}
+
+function splitTwoSidedBeforePrompt(prompt) {
+  const raw = String(prompt || "").trim().replace(/\s+/g, " ");
+  if (!raw) return null;
+  const match = raw.match(/^(.*?)\bbefore\b(.*)$/i);
+  if (!match) return null;
+  const left = String(match[1] || "").trim().replace(/[,\s]+$/, "");
+  const right = String(match[2] || "").trim().replace(/^[,\s]+/, "");
+  if (!left || !right) return null;
+  return { left, right };
+}
+
+function looksLikeYearDeadlineOnly(text) {
+  const t = String(text || "").trim().toLowerCase();
+  if (!t) return false;
+  if (/^(20\d{2})(\s*-\s*(?:20)?\d{2})?$/.test(t)) return true;
+  if (/^(the\s+year\s+)?20\d{2}$/.test(t)) return true;
+  return false;
+}
+
+function isTwoSidedPrompt(prompt, result = null) {
+  const split = splitTwoSidedBeforePrompt(prompt);
+  if (!split) return false;
+  if (looksLikeYearDeadlineOnly(split.right)) return false;
+  if (result?.trace?.normalizedTwoSided) return true;
+  const sides = `${split.left} ${split.right}`.toLowerCase();
+  return /\b(win|wins|won|make|makes|made|get|gets|got|throw|throws|score|scores|scored|miss|go|goes|finish|finishes|reach|reaches|mvp|super bowl|afc|nfc|playoffs?|touchdowns?|yards?)\b/.test(sides);
+}
+
+function updateFlipButtonVisibility(result = null) {
+  if (!flipBtn) return;
+  const prompt = normalizePrompt(scenarioInput.value);
+  const show = isTwoSidedPrompt(prompt, result);
+  flipBtn.classList.toggle("hidden", !show);
+  flipBtn.disabled = !show || submitBtn.disabled;
+}
+
+function flipCurrentPromptAndEstimate() {
+  const prompt = normalizePrompt(scenarioInput.value);
+  const split = splitTwoSidedBeforePrompt(prompt);
+  if (!split) return;
+  scenarioInput.value = `${split.right} before ${split.left}`.replace(/\s+/g, " ").trim();
+  updateFlipButtonVisibility();
+  scenarioInput.focus();
+  form.requestSubmit();
 }
 
 function isTouchLikeDevice() {
@@ -710,6 +761,7 @@ function showResult(result, prompt) {
   } else {
     hideFeedbackPop();
   }
+  updateFlipButtonVisibility(result);
 }
 
 function showRefusal(message, options = {}) {
@@ -729,6 +781,7 @@ function showRefusal(message, options = {}) {
     "What Are the Odds? provides hypothetical entertainment estimates only. It does not provide sportsbook lines or betting advice.";
   refusalHint.textContent = options.hint || "Try a sports hypothetical instead.";
   statusLine.textContent = message || "Hypothetical entertainment odds only.";
+  updateFlipButtonVisibility();
 }
 
 function showSystemError(message) {
@@ -742,6 +795,7 @@ function showSystemError(message) {
   hideFeedbackPop();
   applyResultCardState("normal");
   statusLine.textContent = message;
+  updateFlipButtonVisibility();
 }
 
 function encodePromptInUrl(prompt) {
@@ -1052,6 +1106,9 @@ async function hydrateLiveSuggestions() {
 }
 
 form.addEventListener("submit", onSubmit);
+if (flipBtn) {
+  flipBtn.addEventListener("click", flipCurrentPromptAndEstimate);
+}
 copyBtn.addEventListener("click", copyCurrentResult);
 if (shareBtn) {
   shareBtn.addEventListener("click", shareCurrentResult);
@@ -1134,10 +1191,12 @@ scenarioInput.addEventListener("keydown", (event) => {
     form.requestSubmit();
   }
 });
+scenarioInput.addEventListener("input", () => updateFlipButtonVisibility());
 const hasSharedPrompt = hydrateFromUrl();
 setupExampleChips();
 checkVersionHandshake();
 hydrateLiveSuggestions();
+updateFlipButtonVisibility();
 
 if (hasSharedPrompt) {
   form.requestSubmit();

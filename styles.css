@@ -120,7 +120,7 @@ h1 {
 
 .input-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   gap: 10px;
   align-items: stretch;
 }
@@ -173,6 +173,32 @@ button {
   align-items: center;
   justify-content: center;
   gap: 8px;
+}
+
+#flip-btn {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card) 85%, #f2ead7 15%);
+  color: var(--text);
+  font-weight: 600;
+  padding: 12px 14px;
+  min-height: 48px;
+  height: 48px;
+  cursor: pointer;
+  transition: border-color 160ms ease, transform 100ms ease, opacity 100ms ease;
+}
+
+#flip-btn:hover {
+  border-color: #bc8c55;
+}
+
+#flip-btn:active {
+  transform: translateY(1px);
+}
+
+#flip-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 #submit-btn:active {
@@ -1062,6 +1088,10 @@ button {
 
   .input-row {
     grid-template-columns: 1fr;
+  }
+
+  #flip-btn {
+    width: 100%;
   }
 
   #submit-btn {

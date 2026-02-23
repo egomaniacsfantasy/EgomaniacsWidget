@@ -1489,6 +1489,7 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
         const profile = {
           name: p.name,
           position: hints.position || p.position || "",
+          teamAbbr: local?.teamAbbr || hints.teamAbbr || "",
           yearsExp: hints.yearsExp,
           age: hints.age,
         };
@@ -1500,6 +1501,8 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
         }
         return {
           playerName: p.name,
+          teamAbbr: profile.teamAbbr || "",
+          position: profile.position || "",
           seasonPct,
           years,
           perSeason,
@@ -1535,6 +1538,11 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
       label: valid.length === 1 ? `${primary.playerName} MVP` : `${joinWithOr(valid.map((p) => p.playerName))} MVP`,
       summaryFragment,
       playerName: primary.playerName,
+      playerEntities: valid.map((p) => ({
+        name: p.playerName,
+        teamAbbr: p.teamAbbr || "",
+        position: p.position || "",
+      })),
       seasonPct: perSeasonUnion[0] * 100,
       years,
       perSeason: perSeasonUnion,
@@ -1617,6 +1625,32 @@ async function buildMixedBeforeEstimate(prompt, asOfDate) {
       ? (right.summaryFragment || `${shortTeamLabel(right.teamToken)} ${shortMarketTag(right.market) || teamMarketLabel(right.market)}`)
       : (right.summaryFragment || `${right.playerName} MVP`);
 
+  const describePlayerSide = (side) => {
+    const players = Array.isArray(side?.playerEntities) ? side.playerEntities : [];
+    if (!players.length) return "";
+    const names = players.map((p) => String(p.name || "").trim()).filter(Boolean);
+    const withTeam = players
+      .map((p) => {
+        const n = String(p.name || "").trim();
+        const t = String(p.teamAbbr || "").trim();
+        const pos = String(p.position || "").trim();
+        const tag = [t, pos].filter(Boolean).join(" ");
+        return tag ? `${n} (${tag})` : n;
+      })
+      .filter(Boolean);
+    const list = withTeam.length ? joinWithOr(withTeam) : joinWithOr(names);
+    return `${list} weighted by current pass environment, red-zone opportunity, and play-caller continuity.`;
+  };
+  const describeTeamSide = (side) => {
+    if (!side || side.type !== "team_market") return "";
+    const team = shortTeamLabel(side.teamToken || "");
+    const market = shortMarketTag(side.market) || teamMarketLabel(side.market);
+    return `${team} ${market} side modeled with roster-volatility decay, conference path difficulty, and baseline health variance.`;
+  };
+
+  const playerContext = isLeftPlayer ? describePlayerSide(left) : describePlayerSide(right);
+  const teamContext = left.type === "team_market" ? describeTeamSide(left) : describeTeamSide(right);
+
   return {
     status: "ok",
     odds: toAmericanOdds(probPct),
@@ -1624,7 +1658,8 @@ async function buildMixedBeforeEstimate(prompt, asOfDate) {
     confidence: anchored ? "High" : "Medium",
     assumptions: [
       "Comparative race model computed event timing across future seasons.",
-      "Player MVP and team market priors were projected year-by-year with decay.",
+      playerContext || "Player-side projection uses role-adjusted priors and year-over-year decay.",
+      teamContext || "Team-side projection uses market hazard with season-over-season decay.",
       "Output is normalized as P(left event happens before right event).",
     ],
     playerName: left.type === "player_mvp" ? left.playerName : right.type === "player_mvp" ? right.playerName : null,
@@ -5686,6 +5721,35 @@ function findEntityMentionIndex(prompt, token) {
   return m.index;
 }
 
+function findTeamMentionIndex(prompt, teamToken) {
+  const text = String(prompt || "");
+  const lower = normalizeEntityName(text);
+  if (!lower) return -1;
+  const abbr = extractNflTeamAbbr(teamToken || "");
+  const candidates = new Set();
+  if (abbr) {
+    candidates.add(String(NFL_TEAM_DISPLAY[abbr] || "").toLowerCase());
+    for (const [alias, a] of Object.entries(NFL_TEAM_ALIASES)) {
+      if (String(a || "").toUpperCase() === String(abbr).toUpperCase()) candidates.add(String(alias || "").toLowerCase());
+    }
+  }
+  candidates.add(String(teamToken || "").toLowerCase());
+  const valid = [...candidates].filter(Boolean).sort((a, b) => b.length - a.length);
+  let best = -1;
+  for (const cand of valid) {
+    const escaped = cand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+    const re = new RegExp(`\\b${escaped}\\b`, "i");
+    const m = re.exec(text);
+    if (m && typeof m.index === "number") {
+      if (best < 0 || m.index < best) best = m.index;
+    } else {
+      const idx = lower.indexOf(normalizeEntityName(cand));
+      if (idx >= 0 && (best < 0 || idx < best)) best = idx;
+    }
+  }
+  return best;
+}
+
 async function buildOrderedEntityAssets(prompt, maxEntities = 6) {
   const knownPlayers = await extractKnownNflNamesFromPrompt(prompt, 12);
   const players =
@@ -5695,6 +5759,7 @@ async function buildOrderedEntityAssets(prompt, maxEntities = 6) {
   const teams = extractKnownTeamTokens(prompt, 8);
   const prefersQb = /\b(mvp|most valuable player|passing|pass tds?|quarterback|qb)\b/i.test(String(prompt || ""));
   const combined = [];
+  const promptLower = normalizeEntityName(prompt);
 
   for (const p of players) {
     const idx = findEntityMentionIndex(prompt, p);
@@ -5702,9 +5767,24 @@ async function buildOrderedEntityAssets(prompt, maxEntities = 6) {
     combined.push({ kind: "player", name: p, idx });
   }
   for (const t of teams) {
-    const idx = findEntityMentionIndex(prompt, t);
+    const idx = findTeamMentionIndex(prompt, t);
     if (idx < 0) continue;
     combined.push({ kind: "team", name: t, idx });
+  }
+
+  // Ensure multi-entity prompts with explicit conjunctions keep all mentioned
+  // entities in order, rather than accidentally collapsing to one side.
+  if (/\b(or|and|before|after|vs|versus|,)\b/i.test(promptLower)) {
+    for (const p of players) {
+      if (combined.some((c) => c.kind === "player" && normalizeEntityName(c.name) === normalizeEntityName(p))) continue;
+      const idx = findEntityMentionIndex(prompt, p);
+      if (idx >= 0) combined.push({ kind: "player", name: p, idx });
+    }
+    for (const t of teams) {
+      if (combined.some((c) => c.kind === "team" && normalizeEntityName(c.name) === normalizeEntityName(t))) continue;
+      const idx = findTeamMentionIndex(prompt, t);
+      if (idx >= 0) combined.push({ kind: "team", name: t, idx });
+    }
   }
 
   const seen = new Set();

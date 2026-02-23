@@ -329,6 +329,7 @@ button {
   max-width: 700px;
   text-align: left;
   flex-wrap: wrap;
+  position: relative;
 }
 
 .entity-strip {
@@ -346,9 +347,9 @@ button {
 }
 
 .entity-avatar {
-  width: 84px;
-  height: 84px;
-  margin-left: -12px;
+  width: 92px;
+  height: 92px;
+  margin-left: -13px;
   border-radius: 999px;
   border: 1px solid rgba(243, 225, 188, 0.35);
   background:
@@ -384,7 +385,7 @@ button {
 }
 
 .entity-strip--pair .entity-avatar {
-  margin-left: -14px;
+  margin-left: -16px;
 }
 
 .entity-strip--pair .entity-avatar:first-child {
@@ -392,13 +393,13 @@ button {
 }
 
 .entity-strip--trio .entity-avatar {
-  margin-left: -12px;
+  margin-left: -13px;
 }
 
 .entity-strip--quad .entity-avatar {
-  width: 72px;
-  height: 72px;
-  margin-left: -10px;
+  width: 78px;
+  height: 78px;
+  margin-left: -11px;
 }
 
 .entity-strip--quad .entity-avatar--team {
@@ -1072,8 +1073,8 @@ button {
   }
 
   .entity-avatar {
-    width: 72px;
-    height: 72px;
+    width: 78px;
+    height: 78px;
     margin-left: -10px;
   }
 
@@ -1083,8 +1084,8 @@ button {
 
   .entity-strip--quad .entity-avatar,
   .entity-strip--dense .entity-avatar {
-    width: 62px;
-    height: 62px;
+    width: 66px;
+    height: 66px;
     margin-left: -8px;
   }
 

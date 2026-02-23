@@ -14,6 +14,7 @@ const freshnessLine = document.getElementById("freshness-line");
 const playerHeadshot = document.getElementById("player-headshot");
 const playerHeadshotSecondary = document.getElementById("player-headshot-secondary");
 const playerHeadshotCluster = document.getElementById("player-headshot-cluster");
+const playerHeadshotWrap = document.getElementById("player-headshot-wrap");
 const entityStrip = document.getElementById("entity-strip");
 const headshotProfilePop = document.getElementById("headshot-profile-pop");
 const headshotProfileLogo = document.getElementById("headshot-profile-logo");
@@ -341,7 +342,7 @@ function hideHeadshotProfile() {
   headshotProfilePop.classList.add("hidden");
 }
 
-function showHeadshotProfile(info, anchor = "primary") {
+function showHeadshotProfile(info, anchor = "primary", anchorEl = null) {
   if (!headshotProfilePop || !headshotProfileName || !headshotProfileMeta) return;
   if (!info || !info.name) return;
   const isTeam = String(info.position || "").toLowerCase() === "team" || String(info.kind || "").toLowerCase() === "team";
@@ -369,7 +370,13 @@ function showHeadshotProfile(info, anchor = "primary") {
     headshotProfileName.textContent = pos ? `${info.name} • ${pos}` : String(info.name || "");
     headshotProfileMeta.textContent = formatPlayerMeta(info);
   }
-  if (anchor === "secondary") {
+  if (anchorEl instanceof Element && playerHeadshotWrap instanceof Element) {
+    const wrapRect = playerHeadshotWrap.getBoundingClientRect();
+    const targetRect = anchorEl.getBoundingClientRect();
+    const leftPx = Math.max(0, targetRect.left - wrapRect.left - 14);
+    headshotProfilePop.style.left = `${leftPx}px`;
+    headshotProfilePop.style.right = "auto";
+  } else if (anchor === "secondary") {
     headshotProfilePop.style.left = "auto";
     headshotProfilePop.style.right = "0";
   } else {
@@ -430,13 +437,18 @@ function renderEntityStrip(result) {
       }
     });
     const info = asset.info && typeof asset.info === "object" ? asset.info : { name: asset.name || "Entity" };
+    const infoLabel = info?.name
+      ? `${info.name}${info?.position ? ` • ${info.position}` : ""}`
+      : String(asset.name || asset.kind || "Entity");
+    img.title = infoLabel;
+    img.setAttribute("aria-label", infoLabel);
     img.addEventListener("click", () => {
       const anchor = idx >= Math.floor(arr.length / 2) ? "secondary" : "primary";
-      showHeadshotProfile(info, anchor);
+      showHeadshotProfile(info, anchor, img);
     });
     img.addEventListener("mouseenter", () => {
       const anchor = idx >= Math.floor(arr.length / 2) ? "secondary" : "primary";
-      showHeadshotProfile(info, anchor);
+      showHeadshotProfile(info, anchor, img);
     });
     img.addEventListener("mouseleave", () => {
       if (!headshotProfilePop?.matches(":hover")) hideHeadshotProfile();

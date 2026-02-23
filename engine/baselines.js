@@ -67,6 +67,72 @@ function genericQbAnyHitsIntThresholdSeasonPct(threshold) {
   return 0.8;
 }
 
+function parseTeamRecordEvent(prompt) {
+  const p = String(prompt || "").toLowerCase();
+  const m = p.match(/\b([0-9]|1[0-7])\s*-\s*([0-9]|1[0-7])\b/);
+  if (!m) return null;
+  const wins = Number(m[1]);
+  const losses = Number(m[2]);
+  if (!Number.isFinite(wins) || !Number.isFinite(losses)) return null;
+  if (wins + losses !== 17) return null;
+
+  const hasRecordIntent = /\b(finish|finishes|ending|end|record|goes|go)\b/.test(p);
+  const hasNflSeasonContext = /\b(nfl|regular season|this season|next season|season)\b/.test(p);
+  if (!hasRecordIntent && !hasNflSeasonContext) return null;
+
+  const anyTeamLanguage = /\b(a team|any team|some team)\b/.test(p);
+  return { wins, losses, anyTeamLanguage };
+}
+
+function logGamma(z) {
+  const g = 7;
+  const coeff = [
+    0.9999999999998099,
+    676.5203681218851,
+    -1259.1392167224028,
+    771.3234287776531,
+    -176.6150291621406,
+    12.507343278686905,
+    -0.13857109526572012,
+    0.000009984369578019571,
+    0.00000015056327351493116,
+  ];
+  if (z < 0.5) return Math.log(Math.PI) - Math.log(Math.sin(Math.PI * z)) - logGamma(1 - z);
+  const z1 = z - 1;
+  let x = coeff[0];
+  for (let i = 1; i < g + 2; i += 1) x += coeff[i] / (z1 + i);
+  const t = z1 + g + 0.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z1 + 0.5) * Math.log(t) - t + Math.log(x);
+}
+
+function logChoose(n, k) {
+  return logGamma(n + 1) - logGamma(k + 1) - logGamma(n - k + 1);
+}
+
+function betaBinomialPmf(k, n, alpha, beta) {
+  const logP =
+    logChoose(n, k) +
+    logGamma(k + alpha) +
+    logGamma(n - k + beta) -
+    logGamma(n + alpha + beta) +
+    logGamma(alpha + beta) -
+    logGamma(alpha) -
+    logGamma(beta);
+  return Math.exp(logP);
+}
+
+function teamRecordSeasonPct(wins, anyTeam) {
+  const nGames = 17;
+  // Symmetric beta-binomial to account for parity + team-strength spread.
+  const alpha = 30;
+  const beta = 30;
+  const oneTeam = clamp(betaBinomialPmf(wins, nGames, alpha, beta), 0.00001, 0.95);
+  if (!anyTeam) return clamp(oneTeam * 100, 0.01, 99.9);
+  const nTeams = 32;
+  const anyTeamProb = 1 - Math.pow(1 - oneTeam, nTeams);
+  return clamp(anyTeamProb * 100, 0.01, 99.9);
+}
+
 export function detectBaselineEvent(prompt) {
   const p = String(prompt || "").toLowerCase();
 
@@ -89,6 +155,23 @@ export function detectBaselineEvent(prompt) {
   }
 
   // Rare-event library can be expanded over time.
+  const hasTiePhrase =
+    /\b(tie|ties|tied|ending in a tie|end in a tie)\b/.test(p) &&
+    /\b(game|season|regular season|matchup)\b/.test(p);
+  if (hasTiePhrase) {
+    const anyTeamLanguage = /\b(a team|any team|some team)\b/.test(p);
+    return {
+      key: anyTeamLanguage ? "nfl_any_team_tie_game_regular" : "nfl_team_tie_game_regular",
+      seasonProbabilityPct: anyTeamLanguage ? 38.0 : 2.8,
+      assumptions: [
+        anyTeamLanguage
+          ? "Historical NFL tie rates mapped to a league-wide chance that at least one game ends tied in a regular season."
+          : "Historical NFL tie rates mapped to a single-team chance of logging at least one tie in a regular season.",
+        "Deterministic historical-frequency baseline with horizon adjustment.",
+      ],
+    };
+  }
+
   const hasNflSeasonContext = /\bnfl\b/.test(p) || /\b(0-17|17-0)\b/.test(p);
   const hasSeasonContext = /\b(regular season|this nfl season|nfl season|this season|season)\b/.test(p);
 
@@ -110,6 +193,23 @@ export function detectBaselineEvent(prompt) {
       assumptions: [
         "Bottom-tail season outcomes are uncommon but more frequent than perfect seasons.",
         "Baseline event model used with time-horizon adjustment.",
+      ],
+    };
+  }
+
+  const recordEvent = parseTeamRecordEvent(p);
+  if (recordEvent) {
+    const pct = teamRecordSeasonPct(recordEvent.wins, recordEvent.anyTeamLanguage);
+    return {
+      key: recordEvent.anyTeamLanguage
+        ? `nfl_any_team_${recordEvent.wins}_${recordEvent.losses}_regular`
+        : `nfl_team_${recordEvent.wins}_${recordEvent.losses}_regular`,
+      seasonProbabilityPct: pct,
+      assumptions: [
+        recordEvent.anyTeamLanguage
+          ? `Estimated chance at least one NFL team finishes exactly ${recordEvent.wins}-${recordEvent.losses}.`
+          : `Estimated chance a specific NFL team finishes exactly ${recordEvent.wins}-${recordEvent.losses}.`,
+        "Deterministic parity-distribution model for 17-game records.",
       ],
     };
   }
@@ -190,7 +290,7 @@ function normalTailAtLeast(mean, sigma, threshold) {
 
 function parseSeasonStatIntent(prompt) {
   const p = String(prompt || "").toLowerCase();
-  const seasonLike = /\b(this year|this season|next year|next season|in \d{4}|season)\b/.test(p);
+  const seasonLike = /\b(this year|this season|next year|next season|in \d{4}|season|nfl)\b/.test(p);
   if (!seasonLike) return null;
   const normalized = p
     .replace(/\brushers?\s+for\b/g, "rushes for")
@@ -198,7 +298,9 @@ function parseSeasonStatIntent(prompt) {
     .replace(/\brec(?:eiv|iev)ing\b/g, "receiving")
     .replace(/\brec\b(?=\s*(?:yards?|yds?)\b)/g, "receiving")
     .replace(/\brec\s+yds?\b/g, "receiving yards")
-    .replace(/\breception\b/g, "receptions");
+    .replace(/\breception\b/g, "receptions")
+    .replace(/\btotal\s+td\b/g, "total touchdowns")
+    .replace(/\btotal\s+tds\b/g, "total touchdowns");
 
   const passing = normalized.match(/\bthrows?\s+(?:for\s+)?(\d{1,4})\s+(passing\s+yards?|yards?|yds?|interceptions?|ints?|picks?|tds?|touchdowns?)\b/);
   if (passing) {
@@ -235,6 +337,14 @@ function parseSeasonStatIntent(prompt) {
   if (receivingTdsCompact) {
     const threshold = Number(receivingTdsCompact[1]);
     if (Number.isFinite(threshold) && threshold >= 1) return { metric: "receiving_tds", threshold };
+  }
+
+  const totalTds =
+    normalized.match(/\b(?:gets?|has|records?|scores?|scored|posts?|puts up)\s+(\d{1,2})\s+(?:total\s+)?(tds?|touchdowns?)\b/) ||
+    normalized.match(/\b(\d{1,2})\s+(?:total\s+)?(tds?|touchdowns?)\b/);
+  if (totalTds) {
+    const threshold = Number(totalTds[1]);
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "total_tds", threshold };
   }
 
   const receivingYards =
@@ -476,6 +586,7 @@ function skillFallbackMean(metric, posGroup) {
     receiving_tds: { rb: 2.4, wr: 5.5, te: 4.8, qb: 0.03, other: 0.8 },
     receptions: { rb: 38, wr: 62, te: 54, qb: 0.1, other: 12 },
     scrimmage_yards: { rb: 1120, wr: 920, te: 640, qb: 250, other: 180 },
+    total_tds: { rb: 8.4, wr: 6.3, te: 4.9, qb: 2.3, other: 1.8 },
   };
   const byPos = table[metric] || {};
   return Number(byPos[posGroup] ?? byPos.other ?? 25);
@@ -497,6 +608,7 @@ function buildSkillSeasonLambda(profile, metric, asOfDate) {
   const withScrimmage = row.seasons.map((s) => ({
     ...s,
     scrimmage_yards: Number(s?.rushing_yards || 0) + Number(s?.receiving_yards || 0),
+    total_tds: Number(s?.rushing_tds || 0) + Number(s?.receiving_tds || 0),
   }));
   const valid = withScrimmage.filter((s) => Number.isFinite(Number(s?.[metric])) && Number(s.games || 0) >= 6);
   if (!valid.length) {
@@ -518,7 +630,7 @@ function buildSkillSeasonLambda(profile, metric, asOfDate) {
 
   // Generic breakout trend carry-forward: reward recent upward trajectory for skill players.
   if (
-    ["receiving_yards", "receptions", "receiving_tds", "rushing_yards", "scrimmage_yards", "rushing_tds"].includes(metric) &&
+    ["receiving_yards", "receptions", "receiving_tds", "rushing_yards", "scrimmage_yards", "rushing_tds", "total_tds"].includes(metric) &&
     valid.length >= 2 &&
     ["wr", "rb", "te"].includes(posGroup)
   ) {
@@ -577,7 +689,7 @@ export function buildPlayerSeasonStatEstimate(prompt, intent, profile, asOfDate,
   else if (modelInput.sampleSeasons === 2) dispersion = 4.8;
   if (modelInput.staleYears >= 1) dispersion -= 0.8;
   if (parsed.metric === "passing_interceptions") dispersion += 1.6;
-  if (["rushing_tds", "receiving_tds"].includes(parsed.metric)) dispersion += 0.5;
+  if (["rushing_tds", "receiving_tds", "total_tds"].includes(parsed.metric)) dispersion += 0.5;
   if (["rushing_yards", "receiving_yards", "receptions"].includes(parsed.metric)) dispersion += 1.4;
   if (parsed.metric === "passing_yards") dispersion += 9.5;
   const variance = lambda + (lambda * lambda) / Math.max(0.8, dispersion);
@@ -631,7 +743,7 @@ export function buildPlayerSeasonStatEstimate(prompt, intent, profile, asOfDate,
     tailProb = normalTailAtLeast(lambda, yardsSigma, parsed.threshold);
     probabilityPct = clamp(tailProb * 100, 0.01, 99.9);
   }
-  if (["receiving_yards", "rushing_yards", "receptions", "scrimmage_yards", "rushing_tds", "receiving_tds"].includes(parsed.metric)) {
+  if (["receiving_yards", "rushing_yards", "receptions", "scrimmage_yards", "rushing_tds", "receiving_tds", "total_tds"].includes(parsed.metric)) {
     const seasons = getSkillPlayerSeasons(profile);
     if (seasons.length >= 2) {
       const vals = seasons
@@ -670,12 +782,12 @@ export function buildPlayerSeasonStatEstimate(prompt, intent, profile, asOfDate,
     impliedProbability: `${probabilityPct.toFixed(1)}%`,
     confidence: "High",
     assumptions: [
-      "Deterministic season stat model (negative-binomial tail) used.",
+      "Used a deterministic season-volume model with a calibrated negative-binomial tail (not LLM guessing).",
       modelInput.modelType === "player_history_blended"
-        ? "Player recent NFL season production was blended with league priors for stability."
+        ? "Blended player trendline with league-era priors, then adjusted for expected snaps/dropbacks and game availability."
         : modelInput.modelType === "skill_history_blended"
-          ? "Player recent rushing/receiving seasons were blended with position priors."
-        : "Tier-based fallback prior used because player season sample was unavailable.",
+          ? "Weighted recent rushing/receiving efficiency, role share, and position-level distribution to price the threshold."
+        : "Limited sample fallback: tier prior + role-based usage baseline + era scoring environment adjustment.",
     ],
     playerName: profile.name || null,
     headshotUrl: null,

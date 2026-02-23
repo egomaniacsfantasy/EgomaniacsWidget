@@ -3,6 +3,7 @@ import express from "express";
 import OpenAI from "openai";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPlayerOutcomes, buildPerformanceThresholdOutcome } from "./engine/outcomes.js";
@@ -24,9 +25,9 @@ const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
 const ODDS_API_BASE = process.env.ODDS_API_BASE || "https://api.the-odds-api.com";
 const ODDS_API_REGIONS = process.env.ODDS_API_REGIONS || "us";
 const ODDS_API_BOOKMAKERS = process.env.ODDS_API_BOOKMAKERS || "draftkings,fanduel";
-const CACHE_VERSION = "v42";
-const API_PUBLIC_VERSION = "2026.02.23.10";
-const DEFAULT_NFL_SEASON = process.env.DEFAULT_NFL_SEASON || "2025-26";
+const CACHE_VERSION = "v43";
+const API_PUBLIC_VERSION = "2026.02.23.12";
+const DEFAULT_NFL_SEASON = "2026-27";
 const oddsCache = new Map();
 const PLAYER_STATUS_TIMEOUT_MS = Number(process.env.PLAYER_STATUS_TIMEOUT_MS || 7000);
 const NFL_INDEX_TIMEOUT_MS = Number(process.env.NFL_INDEX_TIMEOUT_MS || 12000);
@@ -43,6 +44,7 @@ const PHASE2_CALIBRATION_FILE = process.env.PHASE2_CALIBRATION_FILE || "data/pha
 const ACCOLADES_INDEX_FILE = process.env.ACCOLADES_INDEX_FILE || "data/accolades_index.json";
 const MVP_PRIORS_FILE = process.env.MVP_PRIORS_FILE || "data/mvp_odds_2026_27_fanduel.json";
 const FEEDBACK_EVENTS_FILE = process.env.FEEDBACK_EVENTS_FILE || "data/feedback_events.jsonl";
+const ODDS_QUERY_EVENTS_FILE = process.env.ODDS_QUERY_EVENTS_FILE || "data/odds_query_events.jsonl";
 const FEATURE_ENABLE_TRACE = String(process.env.FEATURE_ENABLE_TRACE || "true") === "true";
 const STRICT_BOOT_SELFTEST = String(process.env.STRICT_BOOT_SELFTEST || "false") === "true";
 const execFileAsync = promisify(execFile);
@@ -424,7 +426,7 @@ function isSportsPrompt(prompt) {
 function isLikelySportsHypothetical(prompt) {
   const text = String(prompt || "");
   const lower = normalizePrompt(text);
-  const hasSportsAction = /\b(wins?|make(s)? the playoffs?|hall of fame|hof|mvp|touchdowns?|tds?|interceptions?|ints?|throws?|catches?|gets?|receptions?|rushing|rush(?:es|ed)?|passing|receiving|yards?|yds?|retire(?:d|ment|s)?|retiring|comes? out of retirement|returns? to play)\b/.test(
+  const hasSportsAction = /\b(wins?|make(s)? the playoffs?|hall of fame|hof|mvp|touchdowns?|tds?|interceptions?|ints?|throws?|catches?|gets?|receptions?|rushing|rush(?:es|ed)?|passing|receiving|yards?|yds?|retire(?:d|ment|s)?|retiring|comes? out of retirement|returns? to play|tie|ties|tied)\b/.test(
     lower
   );
   const hasTeam = KNOWN_TEAMS.some((team) => new RegExp(`\\b${team.replace(/\s+/g, "\\s+")}\\b`, "i").test(text));
@@ -452,7 +454,7 @@ function isLikelyGibberishPrompt(prompt) {
 
 function hasMeasurableOutcomeIntent(prompt) {
   const lower = normalizePrompt(prompt);
-  return /\b(win|wins|won|make|makes|made|reach|reaches|throws?|catch(?:es)?|rush(?:es|ing)?|gets?|retire(?:d|ment|s|ing)?|returns?|comeback|playoffs?|mvp|yards?|touchdowns?|tds?|interceptions?|ints?|receptions?|sacks?|record|awards?|super bowl|championship|finals?|0-17|17-0|hall of fame)\b/.test(
+  return /\b(win|wins|won|make|makes|made|reach|reaches|throws?|catch(?:es)?|rush(?:es|ing)?|gets?|finish(?:es|ed|ing)?|end(?:s|ed|ing)?|go(?:es|ing)?|retire(?:d|ment|s|ing)?|returns?|comeback|playoffs?|mvp|yards?|touchdowns?|tds?|interceptions?|ints?|receptions?|sacks?|record|awards?|super bowl|championship|finals?|0-17|17-0|hall of fame|tie|ties|tied)\b/.test(
     lower
   );
 }
@@ -528,6 +530,22 @@ function buildDeterministicDataSnarkResponse() {
     title: "Need Better Data.",
     message: "I don’t have enough deterministic data to price that reliably yet, so I’m not guessing.",
     hint: "Try a concrete NFL scenario: player stat threshold, playoff outcome, awards, or team futures.",
+  };
+}
+
+function hasPlayerMovementIntent(prompt) {
+  const lower = normalizePrompt(prompt);
+  return /\b(signs?\s+with|signed\s+with|re-signs?\s+with|resigns?\s+with|traded?\s+to|trade\s+to|gets?\s+traded?\s+to|moves?\s+to|joins?\s+in\s+free\s+agency|joins?\s+as\s+a\s+free\s+agent)\b/.test(
+    lower
+  );
+}
+
+function buildPlayerMovementSnarkResponse() {
+  return {
+    status: "snark",
+    title: "Not Adam Schefter.",
+    message: "I'm an AI learning model, not Adam Schefter. I can't predict player movement just yet.",
+    hint: "Try on-field outcomes instead: stats, awards, playoffs, or championships.",
   };
 }
 
@@ -751,7 +769,7 @@ function applyDefaultNflSeasonInterpretation(prompt) {
   if (!/\bthis season\b/i.test(text) && !/\bseason\b/i.test(text)) {
     text = `${text} this season`;
   }
-  if (!/\b2025-26\b/i.test(text)) {
+  if (!new RegExp(`\\b${String(DEFAULT_NFL_SEASON).replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\b`, "i").test(text)) {
     text = `${text} (${DEFAULT_NFL_SEASON} NFL season)`;
   }
   return text.replace(/\s+/g, " ").trim();
@@ -2316,8 +2334,35 @@ function sanitizeFeedbackResult(result) {
   };
 }
 
+function sanitizeOddsResultForLog(result) {
+  if (!result || typeof result !== "object") {
+    return {
+      status: "",
+      raw: String(result || ""),
+    };
+  }
+  return {
+    status: String(result.status || ""),
+    odds: String(result.odds || ""),
+    impliedProbability: String(result.impliedProbability || ""),
+    summaryLabel: String(result.summaryLabel || ""),
+    sourceType: String(result.sourceType || ""),
+    sourceLabel: String(result.sourceLabel || ""),
+    asOfDate: String(result.asOfDate || ""),
+    title: String(result.title || ""),
+    message: String(result.message || ""),
+    hint: String(result.hint || ""),
+  };
+}
+
 async function appendFeedbackEvent(event) {
   const filePath = path.resolve(process.cwd(), FEEDBACK_EVENTS_FILE);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.appendFile(filePath, `${JSON.stringify(event)}\n`, "utf8");
+}
+
+async function appendOddsQueryEvent(event) {
+  const filePath = path.resolve(process.cwd(), ODDS_QUERY_EVENTS_FILE);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.appendFile(filePath, `${JSON.stringify(event)}\n`, "utf8");
 }
@@ -2325,6 +2370,27 @@ async function appendFeedbackEvent(event) {
 async function readFeedbackEvents() {
   try {
     const filePath = path.resolve(process.cwd(), FEEDBACK_EVENTS_FILE);
+    const raw = await fs.readFile(filePath, "utf8");
+    return String(raw || "")
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch (_error) {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch (_error) {
+    return [];
+  }
+}
+
+async function readOddsQueryEvents() {
+  try {
+    const filePath = path.resolve(process.cwd(), ODDS_QUERY_EVENTS_FILE);
     const raw = await fs.readFile(filePath, "utf8");
     return String(raw || "")
       .split(/\n+/)
@@ -2529,12 +2595,31 @@ function buildCareerSeasonCurve(baseSeasonWinPct, yearsRemaining, yearsExp, posG
 
 async function estimateCareerSuperBowlOdds(prompt, playerName, localPlayerStatus) {
   const intent = parseCareerSuperBowlIntent(prompt);
-  if (!intent || !playerName || !localPlayerStatus?.teamAbbr) return null;
+  if (!intent || !playerName) return null;
 
-  const localHints = parseLocalIndexNote(localPlayerStatus.note);
+  let status = localPlayerStatus || null;
+  if (!status?.teamAbbr) {
+    const preferQb =
+      getTopQbBoost(playerName) > 1.0 || /\b(qb|quarterback|passing|throws?|mvp)\b/i.test(String(prompt || ""));
+    const preferredPos = preferQb ? "QB" : inferPreferredPositionFromPrompt(prompt);
+    status = await getLocalNflPlayerStatus(playerName, "", preferredPos || "");
+  }
+  if (!status?.teamAbbr) {
+    const profile = await resolveNflPlayerProfile(playerName, "");
+    if (profile?.teamAbbr) {
+      status = {
+        ...(status || {}),
+        teamAbbr: profile.teamAbbr,
+        note: `local_nfl_index:${profile.teamAbbr}:${profile.position || "NA"}:${profile.yearsExp ?? "NA"}:${profile.age ?? "NA"}:active:${profile.playerId || ""}`,
+      };
+    }
+  }
+  if (!status?.teamAbbr) return null;
+
+  const localHints = parseLocalIndexNote(status.note);
   const posGroup = positionGroup(localHints.position);
   const yearsRemaining = estimateCareerYearsRemaining(localHints);
-  const teamName = NFL_TEAM_DISPLAY[localPlayerStatus.teamAbbr] || localPlayerStatus.teamAbbr;
+  const teamName = NFL_TEAM_DISPLAY[status.teamAbbr] || status.teamAbbr;
   const sbRef = await getSportsbookReferenceByTeamAndMarket(teamName, "super_bowl_winner");
   const teamSeasonPct = sbRef
     ? Number(sbRef.impliedProbability.replace("%", ""))
@@ -2583,6 +2668,10 @@ async function estimateCareerSuperBowlOdds(prompt, playerName, localPlayerStatus
     asOfDate: sbRef?.asOfDate || new Date().toISOString().slice(0, 10),
     sourceType: sbRef ? "hybrid_anchored" : "hypothetical",
     sourceLabel: sbRef ? "Career model anchored to live SB market" : "Career historical model",
+    trace: {
+      teamAbbr: status.teamAbbr,
+      preferredPosition: posGroup === "qb" ? "QB" : "",
+    },
   };
 }
 
@@ -2654,6 +2743,8 @@ async function estimatePlayerMvpOdds(prompt, intent, playerName, localPlayerStat
   const mvpIntent = parseMvpIntent(prompt);
   if (!mvpIntent || !playerName || !localPlayerStatus) return null;
   const isSeasonHorizon = intent?.horizon === "season" || intent?.horizon === "next_season";
+  const seasonLikePrompt = /\b(this season|next season|season|20\d{2})\b/i.test(String(prompt || ""));
+  const treatAsSeasonMvp = isSeasonHorizon || seasonLikePrompt;
   const existingMvpWins = knownCareerAccoladeCount(playerName, "mvp_wins");
   const resolvedMvp = isSeasonHorizon
     ? {
@@ -2684,9 +2775,33 @@ async function estimatePlayerMvpOdds(prompt, intent, playerName, localPlayerStat
 
   // Deterministic sportsbook prior fallback for season MVP prompts when live web lookup misses.
   const prior = resolveMvpSeasonPrior(playerName);
+  const priorOddsNumber = prior?.odds ? parseAmericanOddsNumber(prior.odds) : null;
+  const ultraLongshot =
+    Number.isFinite(priorOddsNumber) &&
+    priorOddsNumber !== null &&
+    priorOddsNumber >= 25000;
+
+  if (treatAsSeasonMvp && (!prior || ultraLongshot)) {
+    return {
+      ...noChanceEstimate(prompt, asOfDate),
+      assumptions: [
+        !prior
+          ? "Player is not on the current curated 2026-27 MVP board."
+          : "Player is on an ultra-longshot MVP tier on the current board.",
+      ],
+      sourceType: "constraint_model",
+      sourceLabel: "Season MVP relevance gate",
+      trace: {
+        award: "mvp",
+        gate: !prior ? "not_on_mvp_board" : "ultra_longshot",
+        priorOdds: prior?.odds || null,
+      },
+    };
+  }
+
   if (
     prior &&
-    isSeasonHorizon &&
+    treatAsSeasonMvp &&
     !mvpIntent.exact &&
     resolvedMvp.targetOverallCount === 1
   ) {
@@ -3170,7 +3285,7 @@ function hasWholeCareerTeamIntent(prompt) {
 
 function hasStrongSportsContext(prompt) {
   const lower = normalizePrompt(prompt);
-  return /\b(nfl|nba|mlb|nhl|super bowls?|playoffs?|mvp|offensive player of the year|defensive player of the year|opoy|dpoy|touchdowns?|tds?|interceptions?|ints?|passing|yards?|qb|quarterback|wide receiver|running back|tight end|afc|nfc|championships?|finals?|world series|stanley cup|retire(?:d|ment|s)?|retiring|hall of fame|hof|all[- ]pro)\b/.test(
+  return /\b(nfl|nba|mlb|nhl|super bowls?|playoffs?|mvp|offensive player of the year|defensive player of the year|opoy|dpoy|touchdowns?|tds?|interceptions?|ints?|passing|yards?|qb|quarterback|wide receiver|running back|tight end|afc|nfc|championships?|finals?|world series|stanley cup|retire(?:d|ment|s)?|retiring|hall of fame|hof|all[- ]pro|tie|ties|tied)\b/.test(
     lower
   );
 }
@@ -3184,7 +3299,7 @@ function hasExplicitNonNflLeagueContext(prompt) {
 
 function hasNflSpecificContext(prompt) {
   const lower = normalizePrompt(prompt);
-  return /\b(nfl|super bowls?|afc|nfc|mvp|touchdowns?|tds?|interceptions?|ints?|passing yards?|receiving yards?|rushing yards?|receptions?|rush(?:es|ing|ed)?|qb|patriots|chiefs|bills|jets|dolphins|ravens|49ers|packers|cowboys|eagles)\b/.test(
+  return /\b(nfl|super bowls?|afc|nfc|mvp|touchdowns?|tds?|interceptions?|ints?|passing yards?|receiving yards?|rushing yards?|receptions?|rush(?:es|ing|ed)?|qb|tie|ties|tied|patriots|chiefs|bills|jets|dolphins|ravens|49ers|packers|cowboys|eagles)\b/.test(
     lower
   );
 }
@@ -3594,6 +3709,18 @@ async function chooseBestLocalNflCandidate(player, options = {}) {
   const key = normalizePersonName(player);
   const candidates = nflPlayerIndex.get(key);
   if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
+  // Product rule: "Josh Allen" should resolve to the Bills QB by default.
+  if (key === "josh allen") {
+    const billsQb = candidates.find(
+      (c) =>
+        String(c.team || "").toUpperCase() === "BUF" &&
+        String(c.position || "").toUpperCase() === "QB" &&
+        String(c.status || "").toLowerCase() === "active"
+    );
+    if (billsQb) return billsQb;
+  }
+
   const ranked = [...candidates].sort(
     (a, b) => scoreLocalNflCandidate(b, options) - scoreLocalNflCandidate(a, options)
   );
@@ -3629,7 +3756,7 @@ async function inferLocalNflPlayerFromPrompt(prompt, preferredTeamAbbr = "") {
   return null;
 }
 
-async function getLocalNflPlayerStatus(player, preferredTeamAbbr = "") {
+async function getLocalNflPlayerStatus(player, preferredTeamAbbr = "", preferredPosition = "") {
   if (!player) return null;
   if (nflPlayerIndex.size === 0) {
     try {
@@ -3640,6 +3767,7 @@ async function getLocalNflPlayerStatus(player, preferredTeamAbbr = "") {
   }
   const found = await chooseBestLocalNflCandidate(player, {
     preferredTeamAbbr,
+    preferredPosition,
     preferActive: true,
   });
   if (!found) return null;
@@ -4069,44 +4197,48 @@ async function getSportsbookReferenceByTeamAndMarket(teamToken, market) {
   const strictKeywordMatch = marketNeedsStrictKeywordMatch(market);
 
   let best = null;
-  for (const sportKey of tried) {
-    const data = await fetchOddsApiJson(`/v4/sports/${sportKey}/odds`, {
-      regions: ODDS_API_REGIONS,
-      markets: "outrights",
-      oddsFormat: "american",
-      bookmakers: ODDS_API_BOOKMAKERS,
-    });
-    if (!Array.isArray(data)) continue;
+  const bookmakerPasses = [ODDS_API_BOOKMAKERS, ""];
+  for (const bookmakerFilter of bookmakerPasses) {
+    for (const sportKey of tried) {
+      const data = await fetchOddsApiJson(`/v4/sports/${sportKey}/odds`, {
+        regions: ODDS_API_REGIONS,
+        markets: "outrights",
+        oddsFormat: "american",
+        bookmakers: bookmakerFilter,
+      });
+      if (!Array.isArray(data)) continue;
 
-    for (const event of data) {
-      for (const bookmaker of event.bookmakers || []) {
-        for (const m of bookmaker.markets || []) {
-          const marketBlob = normalizeEntityName(
-            `${m.key || ""} ${event.sport_title || ""} ${event.home_team || ""} ${event.away_team || ""}`
-          );
-          const keywordScore = scoreMarketKeywordMatch(marketBlob, new Set(hints));
-          if (strictKeywordMatch && hints.length > 0 && keywordScore <= 0) continue;
-          for (const outcome of m.outcomes || []) {
-            const score = scoreOutcomeName(outcome.name, teamToken);
-            if (score <= 0) continue;
-            const price = Number(outcome.price);
-            if (!Number.isFinite(price)) continue;
-            const odds = price > 0 ? `+${price}` : `${price}`;
-            const impliedPct = (price > 0 ? 100 / (price + 100) : Math.abs(price) / (Math.abs(price) + 100)) * 100;
-            const candidate = {
-              score: score * 10 + keywordScore * 5,
-              odds,
-              impliedProbability: `${impliedPct.toFixed(1)}%`,
-              bookmaker: bookmaker.title || bookmaker.key || "Sportsbook",
-              asOfDate: new Date().toISOString().slice(0, 10),
-              sportKey,
-              market,
-            };
-            if (!best || candidate.score > best.score) best = candidate;
+      for (const event of data) {
+        for (const bookmaker of event.bookmakers || []) {
+          for (const m of bookmaker.markets || []) {
+            const marketBlob = normalizeEntityName(
+              `${m.key || ""} ${event.sport_title || ""} ${event.home_team || ""} ${event.away_team || ""}`
+            );
+            const keywordScore = scoreMarketKeywordMatch(marketBlob, new Set(hints));
+            if (strictKeywordMatch && hints.length > 0 && keywordScore <= 0) continue;
+            for (const outcome of m.outcomes || []) {
+              const score = scoreOutcomeName(outcome.name, teamToken);
+              if (score <= 0) continue;
+              const price = Number(outcome.price);
+              if (!Number.isFinite(price)) continue;
+              const odds = price > 0 ? `+${price}` : `${price}`;
+              const impliedPct = (price > 0 ? 100 / (price + 100) : Math.abs(price) / (Math.abs(price) + 100)) * 100;
+              const candidate = {
+                score: score * 10 + keywordScore * 5,
+                odds,
+                impliedProbability: `${impliedPct.toFixed(1)}%`,
+                bookmaker: bookmaker.title || bookmaker.key || "Sportsbook",
+                asOfDate: new Date().toISOString().slice(0, 10),
+                sportKey,
+                market,
+              };
+              if (!best || candidate.score > best.score) best = candidate;
+            }
           }
         }
       }
     }
+    if (best) break;
   }
 
   return best;
@@ -4524,6 +4656,14 @@ function toAmericanOdds(probPct) {
   const rounded = Math.round(raw / step) * step;
   if (rounded > 0) return `+${rounded}`;
   return `${rounded}`;
+}
+
+function parseAmericanOddsNumber(odds) {
+  const s = String(odds || "").trim();
+  if (!s) return null;
+  const n = Number(s.replace(/[^\d+-]/g, ""));
+  if (!Number.isFinite(n) || n === 0) return null;
+  return n;
 }
 
 function parseCombinedPassingTdIntent(prompt) {
@@ -6098,6 +6238,26 @@ async function enrichEntityMedia(
     entityAssets = [];
   }
 
+  if (playerAsset?.headshotUrl && playerInfo?.name) {
+    const normalizedPrimary = normalizePersonName(playerInfo.name);
+    const withoutDuplicatePrimary = entityAssets.filter(
+      (a) =>
+        !(
+          String(a?.kind || "").toLowerCase() === "player" &&
+          normalizePersonName(a?.name || "") === normalizedPrimary
+        )
+    );
+    entityAssets = [
+      {
+        kind: "player",
+        name: playerInfo.name,
+        imageUrl: playerAsset.headshotUrl,
+        info: playerInfo,
+      },
+      ...withoutDuplicatePrimary,
+    ].slice(0, 10);
+  }
+
   return {
     ...baseValue,
     assumptions: buildSituationContextAssumptions(entityAssets, baseValue?.assumptions),
@@ -6310,6 +6470,36 @@ function decorateForScenarioComplexity(value, conditionalIntent, jointEventInten
   };
 }
 
+app.use("/api/odds", (req, res, next) => {
+  if (req.method !== "POST") return next();
+  const requestId = randomUUID();
+  const startedAt = Date.now();
+  const prompt = String(req.body?.prompt || "").trim().slice(0, 500);
+  const sessionId = String(req.body?.sessionId || req.get("x-ewa-session-id") || "").slice(0, 80);
+  res.setHeader("x-ewa-request-id", requestId);
+
+  const originalJson = res.json.bind(res);
+  res.json = (payload) => {
+    let out = payload;
+    if (out && typeof out === "object" && !Array.isArray(out) && !("requestId" in out)) {
+      out = { ...out, requestId };
+    }
+    const event = {
+      ts: new Date().toISOString(),
+      requestId,
+      sessionId,
+      prompt,
+      result: sanitizeOddsResultForLog(out),
+      httpStatus: Number(res.statusCode || 200),
+      latencyMs: Math.max(0, Date.now() - startedAt),
+      ua: String(req.get("user-agent") || "").slice(0, 300),
+    };
+    appendOddsQueryEvent(event).catch(() => {});
+    return originalJson(out);
+  };
+  return next();
+});
+
 app.post("/api/odds", async (req, res) => {
   try {
     metrics.oddsRequests += 1;
@@ -6371,6 +6561,11 @@ app.post("/api/odds", async (req, res) => {
     if (hasProBowlIntent(promptForParsing)) {
       metrics.snarks += 1;
       return res.json(buildProBowlSnarkResponse());
+    }
+
+    if (hasPlayerMovementIntent(promptForParsing)) {
+      metrics.snarks += 1;
+      return res.json(buildPlayerMovementSnarkResponse());
     }
 
     if (/\b(my friend|my buddy|my cousin|my brother|my sister|my dad|my mom|my uncle|my aunt)\b/i.test(promptForParsing)) {
@@ -6746,10 +6941,11 @@ app.post("/api/odds", async (req, res) => {
 
     try {
       const today = new Date().toISOString().slice(0, 10);
+      const preferredPosFromPrompt = inferPreferredPositionFromPrompt(promptForParsing);
       const [liveState, liveContext, initialLocalPlayerStatus] = await Promise.all([
         refreshLiveSportsState(false),
         getLiveSportsContext(promptForParsing),
-        playerHint ? getLocalNflPlayerStatus(playerHint, targetNflTeamAbbr || "") : Promise.resolve(null),
+        playerHint ? getLocalNflPlayerStatus(playerHint, targetNflTeamAbbr || "", preferredPosFromPrompt) : Promise.resolve(null),
       ]);
       let localPlayerStatus = initialLocalPlayerStatus;
       let resolvedPlayerHint = playerHint;
@@ -6764,7 +6960,11 @@ app.post("/api/odds", async (req, res) => {
         const inferredFromPrompt = await inferLocalNflPlayerFromPrompt(promptForParsing, targetNflTeamAbbr || "");
         if (inferredFromPrompt) {
           resolvedPlayerHint = inferredFromPrompt;
-          localPlayerStatus = await getLocalNflPlayerStatus(inferredFromPrompt, targetNflTeamAbbr || "");
+          localPlayerStatus = await getLocalNflPlayerStatus(
+            inferredFromPrompt,
+            targetNflTeamAbbr || "",
+            preferredPosFromPrompt
+          );
         }
       }
       if (localPlayerStatus && (resolvedPlayerHint || playerHint)) {
@@ -6945,12 +7145,18 @@ app.post("/api/odds", async (req, res) => {
           localPlayerStatus
         );
         if (careerSbEstimate) {
+          const careerPreferredTeamAbbr = String(careerSbEstimate?.trace?.teamAbbr || "");
+          const careerPreferredPosition = String(careerSbEstimate?.trace?.preferredPosition || "");
           const value = await enrichEntityMedia(
             promptForParsing,
             careerSbEstimate,
             resolvedPlayerHint || playerHint,
             "",
-            mediaOptions
+            {
+              ...mediaOptions,
+              preferredTeamAbbr: careerPreferredTeamAbbr || mediaOptions.preferredTeamAbbr,
+              preferredPosition: careerPreferredPosition || mediaOptions.preferredPosition || "",
+            }
           );
           const finalValue = decorateForScenarioComplexity(value, conditionalIntent, jointEventIntent);
           oddsCache.set(normalizedPrompt, { ts: Date.now(), value: finalValue });
@@ -7530,6 +7736,7 @@ app.post("/api/feedback", async (req, res) => {
     const event = {
       ts: new Date().toISOString(),
       vote: voteRaw,
+      requestId: String(req.body?.requestId || "").slice(0, 80),
       prompt,
       result: sanitizeFeedbackResult(req.body?.result),
       ua: String(req.get("user-agent") || "").slice(0, 300),
@@ -7586,6 +7793,308 @@ app.get("/api/feedback/recent", async (req, res) => {
   } catch (error) {
     return res.status(500).json({ error: error?.message || "Failed to read recent feedback" });
   }
+});
+
+app.get("/api/feedback/admin", async (req, res) => {
+  try {
+    const voteFilter = String(req.query?.vote || "").trim().toLowerCase(); // up/down/none/all
+    const q = String(req.query?.q || "").trim().toLowerCase();
+    const limitRaw = Number(req.query?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(2000, Math.floor(limitRaw))) : 500;
+
+    const [queries, feedback] = await Promise.all([readOddsQueryEvents(), readFeedbackEvents()]);
+    const voteByRequestId = new Map();
+    for (const f of feedback) {
+      const rid = String(f?.requestId || "").trim();
+      if (!rid) continue;
+      voteByRequestId.set(rid, f?.vote === "up" ? "up" : f?.vote === "down" ? "down" : "none");
+    }
+
+    const merged = queries.map((row) => {
+      const rid = String(row?.requestId || "").trim();
+      const vote = rid && voteByRequestId.has(rid) ? voteByRequestId.get(rid) : "none";
+      return {
+        ts: String(row?.ts || ""),
+        requestId: rid,
+        sessionId: String(row?.sessionId || ""),
+        prompt: String(row?.prompt || ""),
+        result: row?.result && typeof row.result === "object" ? row.result : {},
+        vote,
+      };
+    });
+
+    const filtered = merged.filter((row) => {
+      if (voteFilter && voteFilter !== "all" && row.vote !== voteFilter) return false;
+      if (q) {
+        const hay = `${row.prompt} ${JSON.stringify(row.result || {})}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+
+    const ordered = filtered
+      .sort((a, b) => new Date(b.ts || 0).getTime() - new Date(a.ts || 0).getTime())
+      .slice(0, limit);
+
+    let up = 0;
+    let down = 0;
+    let none = 0;
+    for (const row of merged) {
+      if (row.vote === "up") up += 1;
+      else if (row.vote === "down") down += 1;
+      else none += 1;
+    }
+
+    return res.json({
+      status: "ok",
+      totalQueries: merged.length,
+      thumbsUp: up,
+      thumbsDown: down,
+      noVote: none,
+      count: ordered.length,
+      events: ordered,
+      files: {
+        queries: ODDS_QUERY_EVENTS_FILE,
+        feedback: FEEDBACK_EVENTS_FILE,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Failed to build feedback admin data" });
+  }
+});
+
+app.get("/feedback", (_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Egomaniacs Feedback Admin</title>
+  <style>
+    :root {
+      --bg: #0f0f10;
+      --panel: #18181b;
+      --border: #3b3b42;
+      --text: #f4f4f5;
+      --muted: #a1a1aa;
+      --good: #22c55e;
+      --bad: #ef4444;
+      --chip: #232327;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(circle at 20% 10%, #2a2208 0%, var(--bg) 45%);
+      color: var(--text);
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 32px auto;
+      padding: 0 16px;
+    }
+    h1 {
+      margin: 0 0 4px;
+      font-size: 28px;
+    }
+    .sub {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .card {
+      background: linear-gradient(180deg, #1f1f23, #17171a);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .value { font-size: 28px; font-weight: 700; margin-top: 6px; }
+    .value.good { color: var(--good); }
+    .value.bad { color: var(--bad); }
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    select, button {
+      background: var(--chip);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 14px;
+    }
+    button { cursor: pointer; }
+    .table-wrap {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--panel);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      vertical-align: top;
+      padding: 10px;
+      border-bottom: 1px solid #2b2b30;
+    }
+    th { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    tr:last-child td { border-bottom: 0; }
+    .chip {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .up { background: rgba(34,197,94,.15); color: var(--good); border: 1px solid rgba(34,197,94,.4); }
+    .down { background: rgba(239,68,68,.15); color: var(--bad); border: 1px solid rgba(239,68,68,.4); }
+    .none { background: rgba(161,161,170,.12); color: #d4d4d8; border: 1px solid rgba(161,161,170,.35); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); }
+    .small { color: var(--muted); font-size: 12px; }
+    .returned {
+      max-width: 420px;
+      white-space: pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .search {
+      min-width: 280px;
+    }
+    @media (max-width: 900px) {
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .search { min-width: 140px; }
+      th:nth-child(6), td:nth-child(6) { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Feedback Admin</h1>
+    <p class="sub">Thumbs-up / thumbs-down feedback with prompt + returned output</p>
+    <div class="cards">
+      <div class="card"><div class="label">Total</div><div class="value" id="total">-</div></div>
+      <div class="card"><div class="label">Thumbs Up</div><div class="value good" id="up">-</div></div>
+      <div class="card"><div class="label">Thumbs Down</div><div class="value bad" id="down">-</div></div>
+      <div class="card"><div class="label">No Vote</div><div class="value" id="none">-</div></div>
+      <div class="card"><div class="label">Down Rate</div><div class="value" id="downRate">-</div></div>
+    </div>
+    <div class="toolbar">
+      <label class="small" for="voteFilter">Filter</label>
+      <select id="voteFilter">
+        <option value="all">All</option>
+        <option value="down">Thumbs Down</option>
+        <option value="up">Thumbs Up</option>
+        <option value="none">No Vote</option>
+      </select>
+      <input id="searchInput" class="search" type="text" placeholder="Search prompt/output..." />
+      <button id="refreshBtn">Refresh</button>
+      <span class="small" id="status">Loading...</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Vote</th>
+            <th>Prompt</th>
+            <th>Returned</th>
+            <th>Request ID</th>
+            <th>Session</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </div>
+  <script>
+    const totalEl = document.getElementById("total");
+    const upEl = document.getElementById("up");
+    const downEl = document.getElementById("down");
+    const noneEl = document.getElementById("none");
+    const downRateEl = document.getElementById("downRate");
+    const rowsEl = document.getElementById("rows");
+    const voteFilterEl = document.getElementById("voteFilter");
+    const searchInput = document.getElementById("searchInput");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const statusEl = document.getElementById("status");
+
+    function fmtTime(iso) {
+      try { return new Date(iso).toLocaleString(); } catch { return iso || "-"; }
+    }
+
+    function pickReturned(result) {
+      if (!result || typeof result !== "object") return "-";
+      return JSON.stringify(result, null, 2);
+    }
+
+    async function loadAdmin() {
+      const vote = voteFilterEl.value || "all";
+      const q = String(searchInput?.value || "").trim();
+      const qs = new URLSearchParams();
+      qs.set("limit", "1000");
+      qs.set("vote", vote);
+      if (q) qs.set("q", q);
+      const r = await fetch("/api/feedback/admin?" + qs.toString());
+      const j = await r.json();
+      totalEl.textContent = j.totalQueries ?? "-";
+      upEl.textContent = j.thumbsUp ?? "-";
+      downEl.textContent = j.thumbsDown ?? "-";
+      noneEl.textContent = j.noVote ?? "-";
+      const total = Number(j.totalQueries || 0);
+      const down = Number(j.thumbsDown || 0);
+      downRateEl.textContent = total > 0 ? ((down / total) * 100).toFixed(1) + "%" : "-";
+      const rows = Array.isArray(j.events) ? j.events : [];
+      rowsEl.innerHTML = rows.map((e) => {
+        const voteClass = e.vote === "up" ? "up" : e.vote === "down" ? "down" : "none";
+        return '<tr>' +
+          '<td class="mono">' + fmtTime(e.ts) + '</td>' +
+          '<td><span class="chip ' + voteClass + '">' + (e.vote || "-") + '</span></td>' +
+          '<td>' + String(e.prompt || "-").replace(/</g, "&lt;") + '</td>' +
+          '<td class="returned">' + String(pickReturned(e.result) || "-").replace(/</g, "&lt;") + '</td>' +
+          '<td class="mono">' + String(e.requestId || "-").replace(/</g, "&lt;") + '</td>' +
+          '<td class="mono">' + String(e.sessionId || "-").replace(/</g, "&lt;") + '</td>' +
+          '</tr>';
+      }).join("");
+      if (!rows.length) {
+        rowsEl.innerHTML = '<tr><td colspan="6" class="small">No rows found.</td></tr>';
+      }
+    }
+
+    async function refresh() {
+      statusEl.textContent = "Refreshing...";
+      try {
+        await loadAdmin();
+        statusEl.textContent = "Updated " + new Date().toLocaleTimeString();
+      } catch (e) {
+        statusEl.textContent = "Failed to load feedback";
+      }
+    }
+
+    refreshBtn.addEventListener("click", refresh);
+    voteFilterEl.addEventListener("change", refresh);
+    searchInput?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") refresh();
+    });
+    refresh();
+    setInterval(refresh, 15000);
+  </script>
+</body>
+</html>`);
 });
 
 app.get("/api/version", (_req, res) => {

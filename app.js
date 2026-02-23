@@ -40,7 +40,7 @@ const feedbackDownBtn = document.getElementById("feedback-down");
 const feedbackThanks = document.getElementById("feedback-thanks");
 const PLACEHOLDER_ROTATE_MS = 3200;
 const EXAMPLE_REFRESH_MS = 12000;
-const CLIENT_API_VERSION = "2026.02.23.10";
+const CLIENT_API_VERSION = "2026.02.23.12";
 const FEEDBACK_RATED_MAP_KEY = "ewa_feedback_rated_map";
 const FEEDBACK_SESSION_ID_KEY = "ewa_feedback_session_id";
 
@@ -263,12 +263,14 @@ function maybeShowFeedback(prompt, result) {
             sourceType: result.sourceType,
             sourceLabel: result.sourceLabel,
             asOfDate: result.asOfDate,
+            requestId: result.requestId || "",
           }
         : {
             status: result.status || "refused",
             title: result.title || "",
             message: result.message || "",
             hint: result.hint || "",
+            requestId: result.requestId || "",
           },
     key,
   };
@@ -293,6 +295,7 @@ async function submitFeedback(vote) {
     vote,
     prompt: feedbackContext.prompt,
     result: feedbackContext.result,
+    requestId: String(feedbackContext.result?.requestId || ""),
     clientVersion: CLIENT_API_VERSION,
     sessionId: getOrCreateSessionId(),
   };
@@ -757,8 +760,9 @@ async function fetchOdds(prompt) {
       headers: {
         "Content-Type": "application/json",
         "x-ewa-client-version": CLIENT_API_VERSION,
+        "x-ewa-session-id": getOrCreateSessionId(),
       },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, sessionId: getOrCreateSessionId() }),
       signal: controller.signal,
     });
   } finally {

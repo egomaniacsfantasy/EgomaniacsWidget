@@ -43,8 +43,21 @@ const SLEEPER_NFL_PLAYERS_URL = "https://api.sleeper.app/v1/players/nfl";
 const PHASE2_CALIBRATION_FILE = process.env.PHASE2_CALIBRATION_FILE || "data/phase2_calibration.json";
 const ACCOLADES_INDEX_FILE = process.env.ACCOLADES_INDEX_FILE || "data/accolades_index.json";
 const MVP_PRIORS_FILE = process.env.MVP_PRIORS_FILE || "data/mvp_odds_2026_27_fanduel.json";
-const FEEDBACK_EVENTS_FILE = process.env.FEEDBACK_EVENTS_FILE || "data/feedback_events.jsonl";
-const ODDS_QUERY_EVENTS_FILE = process.env.ODDS_QUERY_EVENTS_FILE || "data/odds_query_events.jsonl";
+const PERSISTENT_DATA_DIR =
+  process.env.PERSISTENT_DATA_DIR ||
+  process.env.RENDER_DISK_MOUNT_PATH ||
+  process.env.RENDER_DISK_PATH ||
+  "";
+const FEEDBACK_EVENTS_FILE =
+  process.env.FEEDBACK_EVENTS_FILE ||
+  (PERSISTENT_DATA_DIR
+    ? path.join(PERSISTENT_DATA_DIR, "feedback_events.jsonl")
+    : "data/feedback_events.jsonl");
+const ODDS_QUERY_EVENTS_FILE =
+  process.env.ODDS_QUERY_EVENTS_FILE ||
+  (PERSISTENT_DATA_DIR
+    ? path.join(PERSISTENT_DATA_DIR, "odds_query_events.jsonl")
+    : "data/odds_query_events.jsonl");
 const FEATURE_ENABLE_TRACE = String(process.env.FEATURE_ENABLE_TRACE || "true") === "true";
 const STRICT_BOOT_SELFTEST = String(process.env.STRICT_BOOT_SELFTEST || "false") === "true";
 const execFileAsync = promisify(execFile);
@@ -2352,21 +2365,27 @@ function sanitizeOddsResultForLog(result) {
   };
 }
 
+function resolveDataFilePath(filePathLike) {
+  const ref = String(filePathLike || "").trim();
+  if (!ref) return path.resolve(process.cwd(), "data/unknown.jsonl");
+  return path.isAbsolute(ref) ? ref : path.resolve(process.cwd(), ref);
+}
+
 async function appendFeedbackEvent(event) {
-  const filePath = path.resolve(process.cwd(), FEEDBACK_EVENTS_FILE);
+  const filePath = resolveDataFilePath(FEEDBACK_EVENTS_FILE);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.appendFile(filePath, `${JSON.stringify(event)}\n`, "utf8");
 }
 
 async function appendOddsQueryEvent(event) {
-  const filePath = path.resolve(process.cwd(), ODDS_QUERY_EVENTS_FILE);
+  const filePath = resolveDataFilePath(ODDS_QUERY_EVENTS_FILE);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.appendFile(filePath, `${JSON.stringify(event)}\n`, "utf8");
 }
 
 async function readFeedbackEvents() {
   try {
-    const filePath = path.resolve(process.cwd(), FEEDBACK_EVENTS_FILE);
+    const filePath = resolveDataFilePath(FEEDBACK_EVENTS_FILE);
     const raw = await fs.readFile(filePath, "utf8");
     return String(raw || "")
       .split(/\n+/)
@@ -2387,7 +2406,7 @@ async function readFeedbackEvents() {
 
 async function readOddsQueryEvents() {
   try {
-    const filePath = path.resolve(process.cwd(), ODDS_QUERY_EVENTS_FILE);
+    const filePath = resolveDataFilePath(ODDS_QUERY_EVENTS_FILE);
     const raw = await fs.readFile(filePath, "utf8");
     return String(raw || "")
       .split(/\n+/)
@@ -8165,6 +8184,8 @@ app.post("/api/mvp-priors/reload", async (_req, res) => {
 });
 
 app.get("/api/health", (_req, res) => {
+  const feedbackFileResolved = resolveDataFilePath(FEEDBACK_EVENTS_FILE);
+  const oddsQueryFileResolved = resolveDataFilePath(ODDS_QUERY_EVENTS_FILE);
   res.json({
     status: "ok",
     apiVersion: API_PUBLIC_VERSION,
@@ -8186,6 +8207,10 @@ app.get("/api/health", (_req, res) => {
     mvpPriorsVersion: mvpPriorsIndex?.version || null,
     mvpPriorsAsOfDate: mvpPriorsIndex?.asOfDate || null,
     feedbackFile: FEEDBACK_EVENTS_FILE,
+    feedbackFileResolved,
+    oddsQueryFile: ODDS_QUERY_EVENTS_FILE,
+    oddsQueryFileResolved,
+    persistentDataDir: PERSISTENT_DATA_DIR || null,
     feedbackUp: metrics.feedbackUp,
     feedbackDown: metrics.feedbackDown,
     oddsApiConfigured: Boolean(ODDS_API_KEY),

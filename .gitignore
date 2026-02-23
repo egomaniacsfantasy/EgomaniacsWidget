@@ -2,4 +2,5 @@ node_modules
 .env
 .DS_Store
 data/tmp
+data/feedback_events.jsonl
 npm-debug.log*

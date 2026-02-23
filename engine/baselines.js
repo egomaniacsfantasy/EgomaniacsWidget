@@ -196,6 +196,8 @@ function parseSeasonStatIntent(prompt) {
     .replace(/\brushers?\s+for\b/g, "rushes for")
     .replace(/\brushesr?\s+for\b/g, "rushes for")
     .replace(/\brec(?:eiv|iev)ing\b/g, "receiving")
+    .replace(/\brec\b(?=\s*(?:yards?|yds?)\b)/g, "receiving")
+    .replace(/\brec\s+yds?\b/g, "receiving yards")
     .replace(/\breception\b/g, "receptions");
 
   const passing = normalized.match(/\bthrows?\s+(?:for\s+)?(\d{1,4})\s+(passing\s+yards?|yards?|yds?|interceptions?|ints?|picks?|tds?|touchdowns?)\b/);
@@ -207,7 +209,7 @@ function parseSeasonStatIntent(prompt) {
     return { metric: /\bint|interception|pick\b/.test(metricWord) ? "passing_interceptions" : "passing_tds", threshold };
   }
 
-  const receivingTds = normalized.match(/\b(?:catches?|receives?|gets?|has)\s+(?:for\s+)?(\d{1,2})\s+(receiving\s+)?(tds?|touchdowns?)\b/);
+  const receivingTds = normalized.match(/\b(?:catches?|receives?|gets?|has|scores?|scored)\s+(?:for\s+)?(\d{1,2})\s+(receiving\s+)?(tds?|touchdowns?)\b/);
   if (receivingTds) {
     const threshold = Number(receivingTds[1]);
     if (Number.isFinite(threshold) && threshold >= 1) return { metric: "receiving_tds", threshold };
@@ -218,14 +220,27 @@ function parseSeasonStatIntent(prompt) {
     const threshold = Number(rushingTds[1]);
     if (Number.isFinite(threshold) && threshold >= 1) return { metric: "rushing_tds", threshold };
   }
-  const rushingTdsGets = normalized.match(/\b(?:gets?|has|records?)\s+(\d{1,2})\s+rushing\s+(tds?|touchdowns?)\b/);
+  const rushingTdsGets = normalized.match(/\b(?:gets?|has|records?|scores?|scored)\s+(\d{1,2})\s+rushing\s+(tds?|touchdowns?)\b/);
   if (rushingTdsGets) {
     const threshold = Number(rushingTdsGets[1]);
     if (Number.isFinite(threshold) && threshold >= 1) return { metric: "rushing_tds", threshold };
   }
+  const rushingTdsCompact = normalized.match(/\b(\d{1,2})\s+rushing\s+(tds?|touchdowns?)\b/);
+  if (rushingTdsCompact) {
+    const threshold = Number(rushingTdsCompact[1]);
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "rushing_tds", threshold };
+  }
 
-  const receivingYards = normalized.match(/\b(?:for|gets?|has|records?)\s+(\d{2,4})\s+(receiving\s+)?(yards?|yds?)\b/);
-  if (receivingYards && /\b(receiv\w*|catch\w*)\b/.test(normalized)) {
+  const receivingTdsCompact = normalized.match(/\b(\d{1,2})\s+receiving\s+(tds?|touchdowns?)\b/);
+  if (receivingTdsCompact) {
+    const threshold = Number(receivingTdsCompact[1]);
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "receiving_tds", threshold };
+  }
+
+  const receivingYards =
+    normalized.match(/\b(?:for|gets?|has|records?)\s+(\d{2,4})\s+(receiving\s+)?(yards?|yds?)\b/) ||
+    normalized.match(/\b(\d{2,4})\s+(receiving\s+)?(yards?|yds?)\b/);
+  if (receivingYards && /\b(receiv\w*|catch\w*|rec)\b/.test(normalized)) {
     const threshold = Number(receivingYards[1]);
     if (Number.isFinite(threshold) && threshold >= 10) return { metric: "receiving_yards", threshold };
   }
@@ -235,13 +250,13 @@ function parseSeasonStatIntent(prompt) {
     const threshold = Number(rushingYards[1]);
     if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold };
   }
-  const rushingYardsGets = normalized.match(/\b(?:gets?|has|records?)\s+(\d{2,4})\s+rushing\s+(yards?|yds?)\b/);
+  const rushingYardsGets = normalized.match(/\b(?:gets?|has|records?|posts?|puts up)\s+(\d{2,4})\s+rushing\s+(yards?|yds?)\b/);
   if (rushingYardsGets) {
     const threshold = Number(rushingYardsGets[1]);
     if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold };
   }
 
-  const scrimmageYards = normalized.match(/\b(?:gets?|has|records?)\s+(\d{2,4})\s+(scrimmage|from scrimmage)\s+(yards?|yds?)\b/);
+  const scrimmageYards = normalized.match(/\b(?:gets?|has|records?|posts?|puts up)\s+(\d{2,4})\s+(scrimmage|from scrimmage)\s+(yards?|yds?)\b/);
   if (scrimmageYards) {
     const threshold = Number(scrimmageYards[1]);
     if (Number.isFinite(threshold) && threshold >= 50) return { metric: "scrimmage_yards", threshold };

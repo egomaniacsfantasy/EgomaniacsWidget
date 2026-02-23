@@ -8,6 +8,7 @@
     "phase2:rebuild": "node scripts/rebuild-phase2-calibration.mjs",
     "data:qb": "node scripts/build-qb-season-stats.mjs",
     "data:skill": "node scripts/build-skill-season-stats.mjs",
+    "data:accolades": "node scripts/build-accolades-index.mjs",
     "test:regression": "node scripts/regression-check.mjs",
     "test:golden": "node scripts/regression-golden.mjs"
   },

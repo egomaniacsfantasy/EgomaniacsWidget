@@ -14,6 +14,10 @@ const freshnessLine = document.getElementById("freshness-line");
 const playerHeadshot = document.getElementById("player-headshot");
 const playerHeadshotSecondary = document.getElementById("player-headshot-secondary");
 const playerHeadshotCluster = document.getElementById("player-headshot-cluster");
+const entityStrip = document.getElementById("entity-strip");
+const headshotProfilePop = document.getElementById("headshot-profile-pop");
+const headshotProfileName = document.getElementById("headshot-profile-name");
+const headshotProfileMeta = document.getElementById("headshot-profile-meta");
 const promptSummary = document.getElementById("prompt-summary");
 const shareBtn = document.getElementById("share-btn");
 const copyBtn = document.getElementById("copy-btn");
@@ -25,6 +29,8 @@ const shareSummaryOutput = document.getElementById("share-summary-output");
 const shareProbabilityOutput = document.getElementById("share-probability-output");
 const shareSourceOutput = document.getElementById("share-source-output");
 const hofWarning = document.getElementById("hof-warning");
+const rationalePanel = document.getElementById("rationale-panel");
+const rationaleList = document.getElementById("rationale-list");
 const feedbackPop = document.getElementById("feedback-pop");
 const feedbackQuestion = document.getElementById("feedback-question");
 const feedbackUpBtn = document.getElementById("feedback-up");
@@ -32,7 +38,7 @@ const feedbackDownBtn = document.getElementById("feedback-down");
 const feedbackThanks = document.getElementById("feedback-thanks");
 const PLACEHOLDER_ROTATE_MS = 3200;
 const EXAMPLE_REFRESH_MS = 12000;
-const CLIENT_API_VERSION = "2026.02.23.5";
+const CLIENT_API_VERSION = "2026.02.23.7";
 const FEEDBACK_COUNT_KEY = "ewa_feedback_estimate_count";
 const FEEDBACK_LAST_SHOWN_KEY = "ewa_feedback_last_shown_ts";
 const FEEDBACK_RATED_MAP_KEY = "ewa_feedback_rated_map";
@@ -66,6 +72,9 @@ let placeholderIdx = 0;
 let placeholderTimer = null;
 let exampleTimer = null;
 let feedbackContext = null;
+let primaryPlayerInfo = null;
+let secondaryPlayerInfo = null;
+let allowFeedbackForCurrentResult = false;
 
 function isNflPrompt(prompt) {
   const text = String(prompt || "").toLowerCase();
@@ -92,6 +101,10 @@ function setBusy(isBusy) {
 }
 
 function clearHeadshot() {
+  if (entityStrip) {
+    entityStrip.innerHTML = "";
+    entityStrip.classList.add("hidden");
+  }
   playerHeadshot.removeAttribute("src");
   playerHeadshot.alt = "";
   playerHeadshot.classList.add("hidden");
@@ -99,6 +112,16 @@ function clearHeadshot() {
   playerHeadshotSecondary.alt = "";
   playerHeadshotSecondary.classList.add("hidden");
   playerHeadshotCluster.classList.add("hidden");
+  hideHeadshotProfile();
+  primaryPlayerInfo = null;
+  secondaryPlayerInfo = null;
+}
+
+function clearRationale() {
+  if (!rationalePanel || !rationaleList) return;
+  rationaleList.innerHTML = "";
+  rationalePanel.open = false;
+  rationalePanel.classList.add("hidden");
 }
 
 function clearFreshness() {
@@ -165,10 +188,19 @@ function getOrCreateSessionId() {
 
 function hideFeedbackPop() {
   if (!feedbackPop) return;
+  feedbackPop.classList.remove("feedback-closing", "feedback-thanked");
   feedbackPop.classList.add("hidden");
   feedbackThanks?.classList.add("hidden");
   feedbackUpBtn?.removeAttribute("disabled");
   feedbackDownBtn?.removeAttribute("disabled");
+}
+
+function closeFeedbackPopAnimated() {
+  if (!feedbackPop || feedbackPop.classList.contains("hidden")) return;
+  feedbackPop.classList.add("feedback-closing");
+  setTimeout(() => {
+    hideFeedbackPop();
+  }, 340);
 }
 
 function maybeShowFeedback(prompt, result) {
@@ -201,6 +233,7 @@ function maybeShowFeedback(prompt, result) {
   };
   feedbackQuestion.textContent = "Was this estimate helpful?";
   feedbackThanks.classList.add("hidden");
+  feedbackPop.classList.remove("feedback-closing", "feedback-thanked");
   feedbackPop.classList.remove("hidden");
   setStoredValue(FEEDBACK_LAST_SHOWN_KEY, now);
 }
@@ -229,12 +262,13 @@ async function submitFeedback(vote) {
   const rated = getFeedbackRatedMap();
   rated[feedbackContext.key] = vote;
   setFeedbackRatedMap(rated);
+  feedbackPop.classList.add("feedback-thanked");
   feedbackThanks.classList.remove("hidden");
-  feedbackQuestion.textContent = "Thanks for your feedback.";
+  feedbackQuestion.textContent = "Feedback received.";
   statusLine.textContent = "Thanks for your feedback.";
   setTimeout(() => {
-    hideFeedbackPop();
-  }, 1400);
+    closeFeedbackPopAnimated();
+  }, 800);
 }
 
 function parseAmericanOdds(oddsText) {
@@ -246,18 +280,100 @@ function parseAmericanOdds(oddsText) {
 
 function renderOddsDisplay(oddsText) {
   const n = parseAmericanOdds(oddsText);
+  oddsOutput.classList.remove("live-shimmer", "heartbeat-glow");
   if (n !== null && n <= -10000) {
     oddsOutput.classList.add("lock-mode");
+    oddsOutput.classList.add("live-shimmer", "heartbeat-glow");
     oddsOutput.innerHTML = `IT'S A LOCK!<span class="odds-subline">(WELL, BASICALLY, AS LONG AS HE'S HEALTHY.)</span>`;
-    return;
+    return "lock";
   }
   if (n !== null && n >= 10000) {
     oddsOutput.classList.add("lock-mode");
+    oddsOutput.classList.add("live-shimmer", "heartbeat-glow");
     oddsOutput.innerHTML = `NO SHOT.<span class="odds-subline">(LIKE, REALLY NO SHOT.)</span>`;
-    return;
+    return "no-shot";
   }
   oddsOutput.classList.remove("lock-mode");
+  oddsOutput.classList.add("live-shimmer", "heartbeat-glow");
   oddsOutput.textContent = oddsText;
+  return "normal";
+}
+
+function applyResultCardState(mode) {
+  resultCard.classList.remove("state-lock", "state-no-shot");
+  if (mode === "lock") resultCard.classList.add("state-lock");
+  if (mode === "no-shot") resultCard.classList.add("state-no-shot");
+}
+
+function formatPlayerMeta(info) {
+  if (!info || typeof info !== "object") return "";
+  const bits = [];
+  if (info.team) bits.push(info.team);
+  if (info.position) bits.push(info.position);
+  if (Number.isFinite(Number(info.age)) && Number(info.age) > 0) bits.push(`Age ${Number(info.age)}`);
+  if (Number.isFinite(Number(info.yearsExp)) && Number(info.yearsExp) >= 0) bits.push(`${Number(info.yearsExp)} yrs exp`);
+  if (info.status) bits.push(String(info.status).toUpperCase());
+  return bits.join(" • ");
+}
+
+function hideHeadshotProfile() {
+  if (!headshotProfilePop) return;
+  headshotProfilePop.classList.add("hidden");
+}
+
+function showHeadshotProfile(info, anchor = "primary") {
+  if (!headshotProfilePop || !headshotProfileName || !headshotProfileMeta) return;
+  if (!info || !info.name) return;
+  headshotProfileName.textContent = info.name;
+  headshotProfileMeta.textContent = formatPlayerMeta(info);
+  if (anchor === "secondary") {
+    headshotProfilePop.style.left = "auto";
+    headshotProfilePop.style.right = "0";
+  } else {
+    headshotProfilePop.style.right = "auto";
+    headshotProfilePop.style.left = "0";
+  }
+  headshotProfilePop.classList.remove("hidden");
+}
+
+function renderEntityStrip(result) {
+  if (!entityStrip) return false;
+  const assets = Array.isArray(result?.entityAssets) ? result.entityAssets : [];
+  if (!assets.length) {
+    entityStrip.innerHTML = "";
+    entityStrip.classList.add("hidden");
+    return false;
+  }
+
+  entityStrip.innerHTML = "";
+  assets.slice(0, 12).forEach((asset, idx, arr) => {
+    if (!asset?.imageUrl) return;
+    const img = document.createElement("img");
+    img.className = "entity-avatar";
+    img.src = asset.imageUrl;
+    img.alt = asset.name || asset.kind || "Entity";
+    img.loading = "lazy";
+    const info = asset.info && typeof asset.info === "object" ? asset.info : { name: asset.name || "Entity" };
+    img.addEventListener("click", () => {
+      const anchor = idx >= Math.floor(arr.length / 2) ? "secondary" : "primary";
+      showHeadshotProfile(info, anchor);
+    });
+    entityStrip.appendChild(img);
+  });
+
+  if (!entityStrip.children.length) {
+    entityStrip.classList.add("hidden");
+    return false;
+  }
+  entityStrip.classList.remove("hidden");
+  return true;
+}
+
+function bindHeadshotPopovers() {
+  const primaryCanShow = Boolean(primaryPlayerInfo && primaryPlayerInfo.name);
+  const secondaryCanShow = Boolean(secondaryPlayerInfo && secondaryPlayerInfo.name);
+  playerHeadshot.style.cursor = primaryCanShow ? "pointer" : "default";
+  playerHeadshotSecondary.style.cursor = secondaryCanShow ? "pointer" : "default";
 }
 
 function isHallOfFamePrompt(text) {
@@ -279,7 +395,7 @@ function formatOddsForShare(oddsText) {
 
 function syncShareCard(result, prompt) {
   shareOddsOutput.textContent = formatOddsForShare(result.odds);
-  shareSummaryOutput.textContent = result.summaryLabel || prompt;
+  shareSummaryOutput.textContent = getDisplaySummaryLabel(result.summaryLabel, prompt);
   shareProbabilityOutput.textContent = result.impliedProbability || "";
 
   if (result.sourceType === "sportsbook" && result.sourceBook) {
@@ -291,16 +407,35 @@ function syncShareCard(result, prompt) {
   }
 }
 
+function normalizeSummaryText(text) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isAwkwardSummaryEnding(text) {
+  return /\b(and|or|to|of|in|on|for|with|before|after|the|a|an)$/i.test(normalizeSummaryText(text));
+}
+
+function getDisplaySummaryLabel(summaryLabel, prompt) {
+  const label = normalizeSummaryText(summaryLabel);
+  if (!label) return normalizeSummaryText(prompt);
+  if (isAwkwardSummaryEnding(label)) return normalizeSummaryText(prompt);
+  return label;
+}
+
 function showResult(result, prompt) {
   refusalCard.classList.add("hidden");
   resultCard.classList.remove("hidden");
+  hideHeadshotProfile();
   resultCard.classList.remove("result-pop");
   void resultCard.offsetWidth;
   resultCard.classList.add("result-pop");
 
-  renderOddsDisplay(result.odds);
+  const oddsMode = renderOddsDisplay(result.odds);
+  applyResultCardState(oddsMode);
   probabilityOutput.textContent = result.impliedProbability;
-  promptSummary.textContent = result.summaryLabel || prompt;
+  promptSummary.textContent = getDisplaySummaryLabel(result.summaryLabel, prompt);
   resultTypeLabel.textContent = result.sourceType === "sportsbook" ? "Market Reference" : "Estimated Odds";
   toggleHallOfFameWarning(isHallOfFamePrompt(prompt) || isHallOfFamePrompt(result.summaryLabel));
   if (result.sourceType === "sportsbook" && result.sourceBook) {
@@ -317,11 +452,31 @@ function showResult(result, prompt) {
     clearFreshness();
   }
 
-  if (result.headshotUrl) {
+  clearRationale();
+  if (Array.isArray(result.assumptions) && result.assumptions.length > 0 && rationalePanel && rationaleList) {
+    result.assumptions.slice(0, 3).forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = String(item || "");
+      rationaleList.appendChild(li);
+    });
+    rationalePanel.open = false;
+    rationalePanel.classList.remove("hidden");
+  }
+
+  const renderedStrip = renderEntityStrip(result);
+  if (renderedStrip) {
+    playerHeadshotCluster.classList.add("hidden");
+  } else if (result.headshotUrl) {
     playerHeadshot.src = result.headshotUrl;
     playerHeadshot.alt = result.playerName || result.summaryLabel || "Sports entity";
     playerHeadshot.classList.remove("hidden");
     playerHeadshotCluster.classList.remove("hidden");
+    primaryPlayerInfo =
+      result.playerInfo && typeof result.playerInfo === "object"
+        ? result.playerInfo
+        : result.playerName
+          ? { name: result.playerName }
+          : null;
     const hasSecondary = Boolean(
       result.secondaryHeadshotUrl &&
       result.secondaryHeadshotUrl !== result.headshotUrl
@@ -330,17 +485,29 @@ function showResult(result, prompt) {
       playerHeadshotSecondary.src = result.secondaryHeadshotUrl;
       playerHeadshotSecondary.alt = result.secondaryPlayerName || "Second sports figure";
       playerHeadshotSecondary.classList.remove("hidden");
+      secondaryPlayerInfo =
+        result.secondaryPlayerInfo && typeof result.secondaryPlayerInfo === "object"
+          ? result.secondaryPlayerInfo
+          : result.secondaryPlayerName
+            ? { name: result.secondaryPlayerName }
+            : null;
     } else {
       playerHeadshotSecondary.removeAttribute("src");
       playerHeadshotSecondary.alt = "";
       playerHeadshotSecondary.classList.add("hidden");
+      secondaryPlayerInfo = null;
     }
+    bindHeadshotPopovers();
   } else {
     clearHeadshot();
   }
 
   syncShareCard(result, prompt);
-  maybeShowFeedback(prompt, result);
+  if (allowFeedbackForCurrentResult) {
+    maybeShowFeedback(prompt, result);
+  } else {
+    hideFeedbackPop();
+  }
 }
 
 function showRefusal(message, options = {}) {
@@ -350,8 +517,10 @@ function showRefusal(message, options = {}) {
   clearHeadshot();
   clearSourceLine();
   clearFreshness();
+  clearRationale();
   toggleHallOfFameWarning(false);
   hideFeedbackPop();
+  applyResultCardState("normal");
   refusalTitle.textContent = options.title || "This tool can’t help with betting picks.";
   refusalCopy.textContent =
     message ||
@@ -366,8 +535,10 @@ function showSystemError(message) {
   clearHeadshot();
   clearSourceLine();
   clearFreshness();
+  clearRationale();
   toggleHallOfFameWarning(false);
   hideFeedbackPop();
+  applyResultCardState("normal");
   statusLine.textContent = message;
 }
 
@@ -439,6 +610,7 @@ async function fetchSuggestions() {
 async function onSubmit(event) {
   event.preventDefault();
   statusLine.textContent = "";
+  allowFeedbackForCurrentResult = Boolean(event?.isTrusted);
 
   const prompt = normalizePrompt(scenarioInput.value);
   if (!prompt) {
@@ -473,6 +645,7 @@ async function onSubmit(event) {
     }
     console.error(error);
   } finally {
+    allowFeedbackForCurrentResult = false;
     setBusy(false);
   }
 }
@@ -675,6 +848,36 @@ copyBtn.addEventListener("click", copyCurrentResult);
 if (shareBtn) {
   shareBtn.addEventListener("click", shareCurrentResult);
 }
+playerHeadshot.addEventListener("click", () => {
+  if (!primaryPlayerInfo?.name) return;
+  const isHidden = headshotProfilePop?.classList.contains("hidden");
+  if (!isHidden && headshotProfileName?.textContent === primaryPlayerInfo.name) {
+    hideHeadshotProfile();
+    return;
+  }
+  showHeadshotProfile(primaryPlayerInfo, "primary");
+});
+playerHeadshotSecondary.addEventListener("click", () => {
+  if (!secondaryPlayerInfo?.name) return;
+  const isHidden = headshotProfilePop?.classList.contains("hidden");
+  if (!isHidden && headshotProfileName?.textContent === secondaryPlayerInfo.name) {
+    hideHeadshotProfile();
+    return;
+  }
+  showHeadshotProfile(secondaryPlayerInfo, "secondary");
+});
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (
+    headshotProfilePop?.contains(target) ||
+    playerHeadshot.contains(target) ||
+    playerHeadshotSecondary.contains(target)
+  ) {
+    return;
+  }
+  hideHeadshotProfile();
+});
 if (feedbackUpBtn) {
   feedbackUpBtn.addEventListener("click", () => submitFeedback("up"));
 }

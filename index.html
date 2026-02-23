@@ -59,9 +59,14 @@
           <p id="odds-output" class="odds-output">+400</p>
 
           <div id="player-headshot-wrap" class="player-headshot-wrap">
+            <div id="entity-strip" class="entity-strip hidden"></div>
             <div id="player-headshot-cluster" class="player-headshot-cluster hidden">
-              <img id="player-headshot" class="player-headshot" alt="" loading="lazy" />
-              <img id="player-headshot-secondary" class="player-headshot player-headshot-secondary hidden" alt="" loading="lazy" />
+              <img id="player-headshot" class="player-headshot" alt="" loading="lazy" tabindex="0" />
+              <img id="player-headshot-secondary" class="player-headshot player-headshot-secondary hidden" alt="" loading="lazy" tabindex="0" />
+            </div>
+            <div id="headshot-profile-pop" class="headshot-profile-pop hidden" role="dialog" aria-live="polite">
+              <p id="headshot-profile-name" class="headshot-profile-name"></p>
+              <p id="headshot-profile-meta" class="headshot-profile-meta"></p>
             </div>
             <p id="prompt-summary" class="prompt-summary"></p>
           </div>
@@ -74,6 +79,10 @@
           </div>
           <p id="source-line" class="source-line hidden"></p>
           <p id="freshness-line" class="freshness-line hidden"></p>
+          <details id="rationale-panel" class="rationale-panel hidden">
+            <summary>Why this number?</summary>
+            <ul id="rationale-list"></ul>
+          </details>
 
           <p id="disclaimer" class="disclaimer">
             Hypothetical estimate for entertainment - not betting advice.

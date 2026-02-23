@@ -242,7 +242,7 @@ button {
 }
 
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 .result-topline {
@@ -346,23 +346,33 @@ button {
 }
 
 .entity-avatar {
-  width: 72px;
-  height: 72px;
-  margin-left: -10px;
+  width: 84px;
+  height: 84px;
+  margin-left: -12px;
   border-radius: 999px;
   border: 1px solid rgba(243, 225, 188, 0.35);
   background:
     radial-gradient(circle at 28% 20%, rgba(165, 115, 32, 0.36), transparent 54%),
     radial-gradient(circle at 78% 78%, rgba(8, 48, 88, 0.42), transparent 58%),
     linear-gradient(145deg, rgba(18, 15, 12, 0.95), rgba(29, 23, 16, 0.94));
-  object-fit: contain;
-  padding: 3px;
+  object-fit: cover;
+  padding: 0;
   box-shadow:
     0 0 0 1px rgba(248, 228, 186, 0.08) inset,
     0 10px 24px rgba(0, 0, 0, 0.28),
     0 0 22px rgba(166, 121, 40, 0.18);
   cursor: pointer;
   flex-shrink: 0;
+}
+
+.entity-avatar--team {
+  object-fit: contain;
+  padding: 6px;
+}
+
+.entity-avatar--player {
+  object-fit: cover;
+  padding: 0;
 }
 
 .entity-avatar:first-child {
@@ -374,11 +384,25 @@ button {
 }
 
 .entity-strip--pair .entity-avatar {
-  margin-left: -12px;
+  margin-left: -14px;
 }
 
 .entity-strip--pair .entity-avatar:first-child {
   margin-left: 0;
+}
+
+.entity-strip--trio .entity-avatar {
+  margin-left: -12px;
+}
+
+.entity-strip--quad .entity-avatar {
+  width: 72px;
+  height: 72px;
+  margin-left: -10px;
+}
+
+.entity-strip--quad .entity-avatar--team {
+  padding: 5px;
 }
 
 .entity-strip--dense .entity-avatar {
@@ -1045,6 +1069,23 @@ button {
     width: 100%;
     max-width: 100%;
     min-width: 0;
+  }
+
+  .entity-avatar {
+    width: 72px;
+    height: 72px;
+    margin-left: -10px;
+  }
+
+  .entity-avatar--team {
+    padding: 5px;
+  }
+
+  .entity-strip--quad .entity-avatar,
+  .entity-strip--dense .entity-avatar {
+    width: 62px;
+    height: 62px;
+    margin-left: -8px;
   }
 
   .site-footer {

@@ -1342,6 +1342,14 @@ function joinWithAnd(items = []) {
   return `${list.slice(0, -1).join(", ")}, and ${list[list.length - 1]}`;
 }
 
+function joinWithOr(items = []) {
+  const list = (Array.isArray(items) ? items : []).filter(Boolean);
+  if (!list.length) return "";
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} or ${list[1]}`;
+  return `${list.slice(0, -1).join(", ")}, or ${list[list.length - 1]}`;
+}
+
 function shortTeamLabel(teamToken = "") {
   const abbr = extractNflTeamAbbr(teamToken);
   return abbr || titleCaseWords(teamToken);
@@ -1520,11 +1528,11 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
     const summaryFragment =
       shortNames.length === 1
         ? `${shortNames[0]} MVP`
-        : `${joinWithAnd(shortNames)} MVP`;
+        : `${joinWithOr(shortNames)} MVP`;
 
     return {
       type: valid.length === 1 ? "player_mvp" : "player_mvp_group",
-      label: valid.length === 1 ? `${primary.playerName} MVP` : `${joinWithAnd(valid.map((p) => p.playerName))} MVP`,
+      label: valid.length === 1 ? `${primary.playerName} MVP` : `${joinWithOr(valid.map((p) => p.playerName))} MVP`,
       summaryFragment,
       playerName: primary.playerName,
       seasonPct: perSeasonUnion[0] * 100,
@@ -4437,7 +4445,8 @@ function hashString(str) {
 function toAmericanOdds(probPct) {
   const p = clamp(probPct / 100, 0.001, 0.999);
   const raw = p >= 0.5 ? -Math.round((p / (1 - p)) * 100) : Math.round(((1 - p) / p) * 100);
-  const step = Math.abs(raw) > 1000 ? 10 : 5;
+  const absRaw = Math.abs(raw);
+  const step = absRaw > 5000 ? 500 : absRaw > 1000 ? 10 : 5;
   const rounded = Math.round(raw / step) * step;
   if (rounded > 0) return `+${rounded}`;
   return `${rounded}`;
@@ -5559,7 +5568,7 @@ async function lookupPlayerHeadshot(player, options = {}) {
 
     const payload = await response.json();
     const players = Array.isArray(payload?.player) ? payload.player : [];
-    if (players.length === 0) return await lookupWikipediaHeadshot(player);
+    if (players.length === 0) return null;
     const playerKey = normalizePersonName(player);
     const isKnownNflName = nflPlayerIndex.get(playerKey)?.length > 0;
     let pool = players;
@@ -5588,16 +5597,16 @@ async function lookupPlayerHeadshot(player, options = {}) {
         scoreSportsDbPlayerCandidate(a, player, preferredTeamAbbr, preferActive)
     );
     const match = ranked[0];
-    if (!exact) return await lookupWikipediaHeadshot(player);
+    if (!exact && !ranked.length) return null;
     const headshotUrl = match?.strCutout || match?.strRender || match?.strThumb || null;
-    if (!headshotUrl) return await lookupWikipediaHeadshot(player);
+    if (!headshotUrl) return null;
 
     return {
       playerName: match?.strPlayer || player,
       headshotUrl,
     };
   } catch (_error) {
-    return await lookupWikipediaHeadshot(player);
+    return null;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -5670,17 +5679,21 @@ function findEntityMentionIndex(prompt, token) {
   const hay = normalizeEntityName(prompt || "");
   const needle = normalizeEntityName(token || "");
   if (!hay || !needle) return -1;
-  const idx = hay.indexOf(needle);
-  if (idx >= 0) return idx;
-  const words = needle.split(" ").filter(Boolean);
-  const last = words[words.length - 1] || "";
-  if (!last) return -1;
-  return hay.indexOf(last);
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  const re = new RegExp(`\\b${escaped}\\b`, "i");
+  const m = re.exec(hay);
+  if (!m || typeof m.index !== "number") return -1;
+  return m.index;
 }
 
 async function buildOrderedEntityAssets(prompt, maxEntities = 6) {
-  const players = extractPlayerNamesFromPrompt(prompt, 8);
+  const knownPlayers = await extractKnownNflNamesFromPrompt(prompt, 12);
+  const players =
+    Array.isArray(knownPlayers) && knownPlayers.length
+      ? knownPlayers.map((p) => p.name).filter(Boolean)
+      : extractPlayerNamesFromPrompt(prompt, 8);
   const teams = extractKnownTeamTokens(prompt, 8);
+  const prefersQb = /\b(mvp|most valuable player|passing|pass tds?|quarterback|qb)\b/i.test(String(prompt || ""));
   const combined = [];
 
   for (const p of players) {
@@ -5708,9 +5721,13 @@ async function buildOrderedEntityAssets(prompt, maxEntities = 6) {
   const assets = [];
   for (const ent of ordered) {
     if (ent.kind === "player") {
-      const head = await lookupPlayerHeadshot(ent.name, { preferActive: true });
+      const head = await lookupPlayerHeadshot(ent.name, {
+        preferActive: true,
+        preferredPosition: prefersQb ? "QB" : "",
+      });
       if (!head?.headshotUrl) continue;
       const profile = await resolveNflPlayerProfile(head.playerName || ent.name, "");
+      if (!profile?.name) continue;
       let teamLogoUrl = "";
       let superBowlOdds = "";
       const teamName = profile ? (NFL_TEAM_DISPLAY[profile.teamAbbr] || profile.teamAbbr || "") : "";
@@ -5941,6 +5958,76 @@ function sanitizeAssumptionsForUI(assumptions) {
   return out;
 }
 
+function nerdMetricLabel(metric = "") {
+  const m = String(metric || "").toLowerCase();
+  if (m === "passing_tds") return "passing TDs";
+  if (m === "passing_yards") return "passing yards";
+  if (m === "rushing_yards") return "rushing yards";
+  if (m === "receiving_yards") return "receiving yards";
+  if (m === "receptions") return "receptions";
+  if (m === "interceptions") return "interceptions";
+  return m.replace(/_/g, " ");
+}
+
+function buildNerdAssumptions(result, prompt = "") {
+  const trace = result?.trace && typeof result.trace === "object" ? result.trace : {};
+  const key = String(trace.baselineEventKey || "").toLowerCase();
+  const out = [];
+
+  const metricLower = String(trace.statMetric || "").toLowerCase();
+  if (trace.modelType || trace.statMetric || trace.lambda) {
+    const metric = nerdMetricLabel(trace.statMetric);
+    const threshold = Number.isFinite(Number(trace.threshold)) ? Number(trace.threshold) : null;
+    const lambda = Number.isFinite(Number(trace.lambda)) ? Number(trace.lambda) : null;
+    const rel = Number.isFinite(Number(trace.reliability)) ? Number(trace.reliability) : null;
+    const seasons = Number.isFinite(Number(trace.sampleSeasons)) ? Number(trace.sampleSeasons) : null;
+    const disp = Number.isFinite(Number(trace.dispersion)) ? Number(trace.dispersion) : null;
+    if (metric && threshold !== null && lambda !== null) {
+      out.push(`Used a negative-binomial tail on ${metric} with threshold ${threshold} and expected mean ${lambda.toFixed(1)}.`);
+    }
+    if (seasons !== null || rel !== null || disp !== null) {
+      out.push(`Sample depth ${seasons ?? "n/a"} season(s), reliability ${rel !== null ? rel.toFixed(2) : "n/a"}, dispersion ${disp ?? "n/a"} to control variance.`);
+    }
+    if (metricLower.includes("passing")) {
+      out.push("QB projection leans on dropback volume, early-down pass tendency, and red-zone throw rate under expected game script.");
+    } else if (metricLower.includes("rushing")) {
+      out.push("Rushing projection keys on carry share, red-zone touches, and whether the offense can stay ahead of the sticks.");
+    } else if (metricLower.includes("receiving") || metricLower.includes("reception")) {
+      out.push("Receiving projection weights target share, route participation, and explosive-play profile in likely scripts.");
+    }
+  }
+
+  if (key === "team_before_team_race" || key === "mixed_player_team_before_race") {
+    const years = Number.isFinite(Number(trace.years)) ? Number(trace.years) : 10;
+    out.push(`Race model computes first-arrival hazard over a ${years}-season window with annual decay.`);
+    if (Array.isArray(trace.firstProbs) && trace.firstProbs.length >= 2) {
+      out.push(`Multi-side normalization applied so probabilities are coherent across all referenced entities.`);
+    } else if (trace.normalizedTwoSided) {
+      out.push(`Two-sided normalization applied so A-before-B and B-before-A remain internally consistent.`);
+    }
+    out.push("Think of it like a season-by-season race: roster ceiling, weekly consistency, and injury variance decide who gets there first.");
+  }
+
+  if (key === "nfl_mvp_union_players" || key === "multi_entity_or_union" || /\bor\b/i.test(String(prompt || ""))) {
+    out.push(`OR-side outcomes are combined as a union event (1 - product of misses), then calibrated.`);
+  }
+
+  if (key === "nfl_mvp" || key === "player_before_player_mvp") {
+    out.push("MVP path blends QB-weighted priors with campaign-level context: team win ceiling, efficiency profile, and narrative runway.");
+  }
+
+  if (key === "multi_year_team_title_window" || key === "multi_year_team_no_title_window") {
+    out.push(`Multi-year futures are compounded year-by-year from season priors with offseason decay.`);
+  }
+
+  if (key === "nfl_two_player_combined_passing_tds_threshold" || key === "nfl_two_player_combined_passing_yards_threshold") {
+    out.push(`Combined-player distribution is built from both players' rate environments, then evaluated on the joint threshold.`);
+    out.push("This is a volume-and-efficiency combo bet: pace, health, and offensive identity drive the tail outcomes.");
+  }
+
+  return out.slice(0, 3);
+}
+
 function applyConsistencyAndTrack(args) {
   const before = JSON.stringify({
     odds: args?.result?.odds,
@@ -5950,7 +6037,9 @@ function applyConsistencyAndTrack(args) {
   });
   const out = applyConsistencyRules(args);
   if (out && out.status === "ok") {
-    out.assumptions = sanitizeAssumptionsForUI(out.assumptions);
+    const nerd = buildNerdAssumptions(out, args?.prompt || "");
+    const clean = sanitizeAssumptionsForUI(out.assumptions);
+    out.assumptions = sanitizeAssumptionsForUI(nerd.length ? nerd : clean);
   }
   const after = JSON.stringify({
     odds: out?.odds,

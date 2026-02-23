@@ -16,6 +16,7 @@ const playerHeadshotSecondary = document.getElementById("player-headshot-seconda
 const playerHeadshotCluster = document.getElementById("player-headshot-cluster");
 const entityStrip = document.getElementById("entity-strip");
 const headshotProfilePop = document.getElementById("headshot-profile-pop");
+const headshotProfileLogo = document.getElementById("headshot-profile-logo");
 const headshotProfileName = document.getElementById("headshot-profile-name");
 const headshotProfileMeta = document.getElementById("headshot-profile-meta");
 const promptSummary = document.getElementById("prompt-summary");
@@ -38,7 +39,7 @@ const feedbackDownBtn = document.getElementById("feedback-down");
 const feedbackThanks = document.getElementById("feedback-thanks");
 const PLACEHOLDER_ROTATE_MS = 3200;
 const EXAMPLE_REFRESH_MS = 12000;
-const CLIENT_API_VERSION = "2026.02.23.7";
+const CLIENT_API_VERSION = "2026.02.23.8";
 const FEEDBACK_COUNT_KEY = "ewa_feedback_estimate_count";
 const FEEDBACK_LAST_SHOWN_KEY = "ewa_feedback_last_shown_ts";
 const FEEDBACK_RATED_MAP_KEY = "ewa_feedback_rated_map";
@@ -100,6 +101,13 @@ function setBusy(isBusy) {
   submitBtn.classList.toggle("is-loading", isBusy);
 }
 
+function isTouchLikeDevice() {
+  return (
+    (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(hover: none)").matches) ||
+    (typeof navigator !== "undefined" && Number(navigator.maxTouchPoints || 0) > 0)
+  );
+}
+
 function clearHeadshot() {
   if (entityStrip) {
     entityStrip.innerHTML = "";
@@ -112,6 +120,7 @@ function clearHeadshot() {
   playerHeadshotSecondary.alt = "";
   playerHeadshotSecondary.classList.add("hidden");
   playerHeadshotCluster.classList.add("hidden");
+  playerHeadshotCluster.style.display = "";
   hideHeadshotProfile();
   primaryPlayerInfo = null;
   secondaryPlayerInfo = null;
@@ -204,7 +213,7 @@ function closeFeedbackPopAnimated() {
 }
 
 function maybeShowFeedback(prompt, result) {
-  if (!feedbackPop || !result || result.status !== "ok") return;
+  if (!feedbackPop || !result) return;
   const count = getStoredNumber(FEEDBACK_COUNT_KEY, 0) + 1;
   setStoredValue(FEEDBACK_COUNT_KEY, count);
 
@@ -220,15 +229,23 @@ function maybeShowFeedback(prompt, result) {
 
   feedbackContext = {
     prompt,
-    result: {
-      status: result.status,
-      odds: result.odds,
-      impliedProbability: result.impliedProbability,
-      summaryLabel: result.summaryLabel,
-      sourceType: result.sourceType,
-      sourceLabel: result.sourceLabel,
-      asOfDate: result.asOfDate,
-    },
+    result:
+      result.status === "ok"
+        ? {
+            status: result.status,
+            odds: result.odds,
+            impliedProbability: result.impliedProbability,
+            summaryLabel: result.summaryLabel,
+            sourceType: result.sourceType,
+            sourceLabel: result.sourceLabel,
+            asOfDate: result.asOfDate,
+          }
+        : {
+            status: result.status || "refused",
+            title: result.title || "",
+            message: result.message || "",
+            hint: result.hint || "",
+          },
     key,
   };
   feedbackQuestion.textContent = "Was this estimate helpful?";
@@ -242,6 +259,14 @@ async function submitFeedback(vote) {
   if (!feedbackContext || !["up", "down"].includes(vote)) return;
   feedbackUpBtn?.setAttribute("disabled", "true");
   feedbackDownBtn?.setAttribute("disabled", "true");
+  feedbackPop.classList.add("feedback-thanked");
+  feedbackThanks.classList.remove("hidden");
+  feedbackQuestion.textContent = "Thanks for your feedback!";
+  statusLine.textContent = "Thanks for your feedback.";
+  setTimeout(() => {
+    closeFeedbackPopAnimated();
+  }, 520);
+
   const body = {
     vote,
     prompt: feedbackContext.prompt,
@@ -249,26 +274,18 @@ async function submitFeedback(vote) {
     clientVersion: CLIENT_API_VERSION,
     sessionId: getOrCreateSessionId(),
   };
-  try {
-    await fetch("/api/feedback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch (_error) {
-    // We still thank the user to avoid friction.
-  }
+  fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch(() => {
+    // Ignore send errors after UX confirmation.
+  });
 
   const rated = getFeedbackRatedMap();
   rated[feedbackContext.key] = vote;
   setFeedbackRatedMap(rated);
-  feedbackPop.classList.add("feedback-thanked");
-  feedbackThanks.classList.remove("hidden");
-  feedbackQuestion.textContent = "Feedback received.";
-  statusLine.textContent = "Thanks for your feedback.";
-  setTimeout(() => {
-    closeFeedbackPopAnimated();
-  }, 800);
+  feedbackContext = null;
 }
 
 function parseAmericanOdds(oddsText) {
@@ -281,6 +298,9 @@ function parseAmericanOdds(oddsText) {
 function renderOddsDisplay(oddsText) {
   const n = parseAmericanOdds(oddsText);
   oddsOutput.classList.remove("live-shimmer", "heartbeat-glow");
+  oddsOutput.style.animation = "none";
+  void oddsOutput.offsetWidth;
+  oddsOutput.style.animation = "";
   if (n !== null && n <= -10000) {
     oddsOutput.classList.add("lock-mode");
     oddsOutput.classList.add("live-shimmer", "heartbeat-glow");
@@ -324,8 +344,31 @@ function hideHeadshotProfile() {
 function showHeadshotProfile(info, anchor = "primary") {
   if (!headshotProfilePop || !headshotProfileName || !headshotProfileMeta) return;
   if (!info || !info.name) return;
-  headshotProfileName.textContent = info.name;
-  headshotProfileMeta.textContent = formatPlayerMeta(info);
+  const isTeam = String(info.position || "").toLowerCase() === "team" || String(info.kind || "").toLowerCase() === "team";
+
+  if (headshotProfileLogo) {
+    const logoUrl = info.teamLogoUrl || "";
+    if (logoUrl) {
+      headshotProfileLogo.src = logoUrl;
+      headshotProfileLogo.alt = `${info.team || info.name || "Team"} logo`;
+      headshotProfileLogo.classList.remove("hidden");
+    } else {
+      headshotProfileLogo.removeAttribute("src");
+      headshotProfileLogo.alt = "";
+      headshotProfileLogo.classList.add("hidden");
+    }
+  }
+
+  if (isTeam) {
+    headshotProfileName.textContent = String(info.name || "");
+    headshotProfileMeta.textContent = info.superBowlOdds
+      ? `2026-27 Super Bowl odds: ${info.superBowlOdds}`
+      : "2026-27 Super Bowl odds: unavailable";
+  } else {
+    const pos = String(info.position || "").trim();
+    headshotProfileName.textContent = pos ? `${info.name} • ${pos}` : String(info.name || "");
+    headshotProfileMeta.textContent = formatPlayerMeta(info);
+  }
   if (anchor === "secondary") {
     headshotProfilePop.style.left = "auto";
     headshotProfilePop.style.right = "0";
@@ -346,25 +389,79 @@ function renderEntityStrip(result) {
   }
 
   entityStrip.innerHTML = "";
-  assets.slice(0, 12).forEach((asset, idx, arr) => {
+  const validAssets = assets
+    .filter((asset) => {
+      const url = String(asset?.imageUrl || "").trim();
+      if (!url) return false;
+      if (/^(about:blank|data:,?)$/i.test(url)) return false;
+      return true;
+    })
+    .slice(0, 10);
+  const overflowCount = Math.max(
+    0,
+    assets.filter((asset) => {
+      const url = String(asset?.imageUrl || "").trim();
+      return Boolean(url) && !/^(about:blank|data:,?)$/i.test(url);
+    }).length - validAssets.length
+  );
+
+  validAssets.forEach((asset, idx, arr) => {
     if (!asset?.imageUrl) return;
     const img = document.createElement("img");
     img.className = "entity-avatar";
+    img.classList.add(asset?.kind === "team" ? "entity-avatar--team" : "entity-avatar--player");
     img.src = asset.imageUrl;
     img.alt = asset.name || asset.kind || "Entity";
     img.loading = "lazy";
+    img.addEventListener("error", () => {
+      img.remove();
+      if (!entityStrip.children.length) {
+        entityStrip.classList.add("hidden");
+      }
+    });
+    img.addEventListener("load", () => {
+      const w = Number(img.naturalWidth || 0);
+      const h = Number(img.naturalHeight || 0);
+      if (w < 8 || h < 8) {
+        img.remove();
+        if (!entityStrip.children.length) {
+          entityStrip.classList.add("hidden");
+        }
+      }
+    });
     const info = asset.info && typeof asset.info === "object" ? asset.info : { name: asset.name || "Entity" };
     img.addEventListener("click", () => {
       const anchor = idx >= Math.floor(arr.length / 2) ? "secondary" : "primary";
       showHeadshotProfile(info, anchor);
     });
+    img.addEventListener("mouseenter", () => {
+      const anchor = idx >= Math.floor(arr.length / 2) ? "secondary" : "primary";
+      showHeadshotProfile(info, anchor);
+    });
+    img.addEventListener("mouseleave", () => {
+      if (!headshotProfilePop?.matches(":hover")) hideHeadshotProfile();
+    });
     entityStrip.appendChild(img);
   });
+
+  if (overflowCount > 0) {
+    const badge = document.createElement("span");
+    badge.className = "entity-overflow-badge";
+    badge.textContent = `+${overflowCount}`;
+    entityStrip.appendChild(badge);
+  }
 
   if (!entityStrip.children.length) {
     entityStrip.classList.add("hidden");
     return false;
   }
+  const avatarCount = validAssets.length;
+  entityStrip.classList.toggle("entity-strip--single", avatarCount === 1);
+  entityStrip.classList.toggle("entity-strip--pair", avatarCount === 2);
+  entityStrip.classList.toggle("entity-strip--trio", avatarCount === 3);
+  entityStrip.classList.toggle("entity-strip--quad", avatarCount === 4);
+  entityStrip.classList.toggle("entity-strip--dense", avatarCount >= 5 && avatarCount <= 7);
+  entityStrip.classList.toggle("entity-strip--ultra", avatarCount >= 8);
   entityStrip.classList.remove("hidden");
   return true;
 }
@@ -424,6 +521,16 @@ function getDisplaySummaryLabel(summaryLabel, prompt) {
   return label;
 }
 
+function applyPromptSummarySizing(text) {
+  const len = String(text || "").length;
+  promptSummary.classList.remove("prompt-summary--compact", "prompt-summary--tiny");
+  if (len > 110) {
+    promptSummary.classList.add("prompt-summary--tiny");
+  } else if (len > 74) {
+    promptSummary.classList.add("prompt-summary--compact");
+  }
+}
+
 function showResult(result, prompt) {
   refusalCard.classList.add("hidden");
   resultCard.classList.remove("hidden");
@@ -435,7 +542,9 @@ function showResult(result, prompt) {
   const oddsMode = renderOddsDisplay(result.odds);
   applyResultCardState(oddsMode);
   probabilityOutput.textContent = result.impliedProbability;
-  promptSummary.textContent = getDisplaySummaryLabel(result.summaryLabel, prompt);
+  const displaySummary = getDisplaySummaryLabel(result.summaryLabel, prompt);
+  promptSummary.textContent = displaySummary;
+  applyPromptSummarySizing(displaySummary);
   resultTypeLabel.textContent = result.sourceType === "sportsbook" ? "Market Reference" : "Estimated Odds";
   toggleHallOfFameWarning(isHallOfFamePrompt(prompt) || isHallOfFamePrompt(result.summaryLabel));
   if (result.sourceType === "sportsbook" && result.sourceBook) {
@@ -465,8 +574,16 @@ function showResult(result, prompt) {
 
   const renderedStrip = renderEntityStrip(result);
   if (renderedStrip) {
+    playerHeadshot.removeAttribute("src");
+    playerHeadshotSecondary.removeAttribute("src");
+    playerHeadshot.classList.add("hidden");
+    playerHeadshotSecondary.classList.add("hidden");
     playerHeadshotCluster.classList.add("hidden");
+    playerHeadshotCluster.style.display = "none";
+    primaryPlayerInfo = null;
+    secondaryPlayerInfo = null;
   } else if (result.headshotUrl) {
+    playerHeadshotCluster.style.display = "";
     playerHeadshot.src = result.headshotUrl;
     playerHeadshot.alt = result.playerName || result.summaryLabel || "Sports entity";
     playerHeadshot.classList.remove("hidden");
@@ -628,6 +745,9 @@ async function onSubmit(event) {
         title: payload.title,
         hint: payload.hint,
       });
+      if (allowFeedbackForCurrentResult) {
+        maybeShowFeedback(prompt, payload);
+      }
       encodePromptInUrl(prompt);
       refreshExampleChips();
       return;
@@ -828,7 +948,9 @@ function startExampleRotation() {
 async function hydrateLiveSuggestions() {
   try {
     const prompts = await fetchSuggestions();
-    const merged = uniqByNormalized([...(prompts || []).filter(isNflPrompt), ...DEFAULT_EXAMPLE_POOL]).filter(isNflPrompt);
+    const merged = uniqByNormalized([...(prompts || []).filter(isNflPrompt), ...DEFAULT_EXAMPLE_POOL]).filter(
+      (p) => isNflPrompt(p) && !/\bpro\s*bowl\b/i.test(String(p || ""))
+    );
     examplePool = merged.length >= 3 ? merged : [...DEFAULT_EXAMPLE_POOL];
     placeholderPool = [...examplePool];
     placeholderIdx = Math.floor(Math.random() * Math.max(1, placeholderPool.length));
@@ -857,6 +979,14 @@ playerHeadshot.addEventListener("click", () => {
   }
   showHeadshotProfile(primaryPlayerInfo, "primary");
 });
+if (!isTouchLikeDevice()) {
+  playerHeadshot.addEventListener("mouseenter", () => {
+    if (primaryPlayerInfo?.name) showHeadshotProfile(primaryPlayerInfo, "primary");
+  });
+  playerHeadshot.addEventListener("mouseleave", () => {
+    if (!headshotProfilePop?.matches(":hover")) hideHeadshotProfile();
+  });
+}
 playerHeadshotSecondary.addEventListener("click", () => {
   if (!secondaryPlayerInfo?.name) return;
   const isHidden = headshotProfilePop?.classList.contains("hidden");
@@ -866,11 +996,21 @@ playerHeadshotSecondary.addEventListener("click", () => {
   }
   showHeadshotProfile(secondaryPlayerInfo, "secondary");
 });
+if (!isTouchLikeDevice()) {
+  playerHeadshotSecondary.addEventListener("mouseenter", () => {
+    if (secondaryPlayerInfo?.name) showHeadshotProfile(secondaryPlayerInfo, "secondary");
+  });
+  playerHeadshotSecondary.addEventListener("mouseleave", () => {
+    if (!headshotProfilePop?.matches(":hover")) hideHeadshotProfile();
+  });
+}
 document.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof Node)) return;
   if (
     headshotProfilePop?.contains(target) ||
+    entityStrip?.contains(target) ||
+    playerHeadshotCluster?.contains(target) ||
     playerHeadshot.contains(target) ||
     playerHeadshotSecondary.contains(target)
   ) {
@@ -879,10 +1019,18 @@ document.addEventListener("click", (event) => {
   hideHeadshotProfile();
 });
 if (feedbackUpBtn) {
-  feedbackUpBtn.addEventListener("click", () => submitFeedback("up"));
+  feedbackUpBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    submitFeedback("up");
+  });
 }
 if (feedbackDownBtn) {
-  feedbackDownBtn.addEventListener("click", () => submitFeedback("down"));
+  feedbackDownBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    submitFeedback("down");
+  });
 }
 scenarioInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {

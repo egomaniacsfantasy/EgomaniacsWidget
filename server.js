@@ -1071,6 +1071,9 @@ function parseBeforeOtherTeamIntent(prompt) {
 function isPlayerBeforeMvpIntent(prompt) {
   const lower = normalizePrompt(numberWordsToDigits(prompt));
   if (!/\b(mvp|most valuable player)\b/.test(lower)) return false;
+  // Mixed-event prompts like "Player wins MVP before Team/Player wins Super Bowl"
+  // must be handled by the mixed race parser.
+  if (/\b(super bowl|sb|afc|nfc|championship|title)\b/.test(lower)) return false;
   // If a team is also referenced, this is likely a mixed race prompt and
   // should be handled by the mixed parser, not player-vs-player MVP parser.
   if (extractKnownTeamTokens(prompt, 2).length > 0) return false;
@@ -1617,7 +1620,21 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
 
   const market = parseTeamMarketFromText(sideText);
   if (!market) return null;
-  const teamToken = extractKnownTeamTokens(sideText, 1)?.[0] || extractTeamName(sideText);
+  let teamToken = extractKnownTeamTokens(sideText, 1)?.[0] || extractTeamName(sideText);
+  let inferredFromPlayerName = "";
+  let inferredFromPlayerTeamAbbr = "";
+  if (!teamToken) {
+    const named = await extractKnownNflNamesFromPrompt(sideText, 2);
+    const inferredName = String(named?.[0]?.name || "").trim();
+    if (inferredName) {
+      const profile = await resolveNflPlayerProfile(inferredName, "");
+      if (profile?.teamAbbr) {
+        inferredFromPlayerName = inferredName;
+        inferredFromPlayerTeamAbbr = String(profile.teamAbbr || "").trim();
+        teamToken = NFL_TEAM_DISPLAY[inferredFromPlayerTeamAbbr] || inferredFromPlayerTeamAbbr;
+      }
+    }
+  }
   if (!teamToken) return null;
 
   const ref = await getSportsbookReferenceByTeamAndMarket(teamToken, market);
@@ -1632,10 +1649,21 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
     perSeason.push(clamp((seasonPct / 100) * Math.pow(0.96, i), 0.001, 0.8));
   }
 
+  let summaryFragment = `${shortTeamLabel(teamToken)} ${shortMarketTag(market) || teamMarketLabel(market)}`;
+  if (inferredFromPlayerName) {
+    const shortPlayer = shortNameLabel(inferredFromPlayerName);
+    if (market === "super_bowl_winner") {
+      const sbWins = knownCareerAccoladeCount(inferredFromPlayerName, "super_bowl_wins");
+      summaryFragment = sbWins >= 1 ? `${shortPlayer} another SB` : `${shortPlayer} SB`;
+    } else {
+      summaryFragment = `${shortPlayer} ${shortMarketTag(market) || teamMarketLabel(market)}`;
+    }
+  }
+
   return {
     type: "team_market",
     label: `${titleCaseWords(teamToken)} ${market.replace(/_/g, " ")}`,
-    summaryFragment: `${shortTeamLabel(teamToken)} ${shortMarketTag(market) || teamMarketLabel(market)}`,
+    summaryFragment,
     teamToken,
     market,
     seasonPct,
@@ -1644,6 +1672,8 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
     anchoredOdds: ref?.odds || null,
     asOfDate: ref?.asOfDate || asOfDate,
     book: ref?.bookmaker || "",
+    inferredFromPlayerName: inferredFromPlayerName || null,
+    inferredFromPlayerTeamAbbr: inferredFromPlayerTeamAbbr || null,
   };
 }
 

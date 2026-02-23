@@ -24,8 +24,8 @@ const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
 const ODDS_API_BASE = process.env.ODDS_API_BASE || "https://api.the-odds-api.com";
 const ODDS_API_REGIONS = process.env.ODDS_API_REGIONS || "us";
 const ODDS_API_BOOKMAKERS = process.env.ODDS_API_BOOKMAKERS || "draftkings,fanduel";
-const CACHE_VERSION = "v38";
-const API_PUBLIC_VERSION = "2026.02.21.4";
+const CACHE_VERSION = "v40";
+const API_PUBLIC_VERSION = "2026.02.21.6";
 const DEFAULT_NFL_SEASON = process.env.DEFAULT_NFL_SEASON || "2025-26";
 const oddsCache = new Map();
 const PLAYER_STATUS_TIMEOUT_MS = Number(process.env.PLAYER_STATUS_TIMEOUT_MS || 7000);
@@ -36,6 +36,7 @@ const LIVE_STATE_TIMEOUT_MS = Number(process.env.LIVE_STATE_TIMEOUT_MS || 9000);
 const MONOTONIC_TIMEOUT_MS = Number(process.env.MONOTONIC_TIMEOUT_MS || 5000);
 const SPORTSBOOK_REF_CACHE_TTL_MS = Number(process.env.SPORTSBOOK_REF_CACHE_TTL_MS || 10 * 60 * 1000);
 const SEMANTIC_CACHE_TTL_MS = Number(process.env.SEMANTIC_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
+const STABLE_CACHE_TTL_MS = Number(process.env.STABLE_CACHE_TTL_MS || 30 * 24 * 60 * 60 * 1000);
 const SLEEPER_NFL_PLAYERS_URL = "https://api.sleeper.app/v1/players/nfl";
 const PHASE2_CALIBRATION_FILE = process.env.PHASE2_CALIBRATION_FILE || "data/phase2_calibration.json";
 const FEATURE_ENABLE_TRACE = String(process.env.FEATURE_ENABLE_TRACE || "true") === "true";
@@ -53,6 +54,7 @@ let oddsApiSportsPromise = null;
 const sportsbookRefCache = new Map();
 const dynamicSportsbookFeedCache = new Map();
 const semanticOddsCache = new Map();
+const stableOddsCache = new Map();
 let phase2Calibration = null;
 let phase2CalibrationLoadedAt = 0;
 const metrics = {
@@ -110,6 +112,11 @@ const SPORTS_PATTERNS = [
   /\bweek\s*\d+\b/i,
   /\bquarterback\b/i,
   /\bqb\b/i,
+  /\breceiv(?:e|es|ing)\b/i,
+  /\brush(?:es|ing|ed)?\b/i,
+  /\breceptions?\b/i,
+  /\byards?\b/i,
+  /\byds?\b/i,
   /\btouchdown\b/i,
   /\btds?\b/i,
   /\brecord\b/i,
@@ -131,9 +138,13 @@ const SPORTS_PATTERNS = [
 const PLAYER_ALIASES = {
   "drake may": "Drake Maye",
   "caleb": "Caleb Williams",
-  "amon ra": "Amon-Ra St. Brown",
+  "jsn": "Jaxon Smith-Njigba",
+  "jaxon smith njigba": "Jaxon Smith-Njigba",
+  "jaxon smith-njigba": "Jaxon Smith-Njigba",
+  "amon ra st. brown": "Amon-Ra St. Brown",
   "amon ra st brown": "Amon-Ra St. Brown",
   "amon-ra st brown": "Amon-Ra St. Brown",
+  "amon-ra st. brown": "Amon-Ra St. Brown",
 };
 const TEAM_TEXT_ALIASES = {
   niners: "49ers",
@@ -400,7 +411,7 @@ function isSportsPrompt(prompt) {
 function isLikelySportsHypothetical(prompt) {
   const text = String(prompt || "");
   const lower = normalizePrompt(text);
-  const hasSportsAction = /\b(wins?|make(s)? the playoffs?|hall of fame|hof|mvp|touchdowns?|tds?|interceptions?|ints?|throws?|catches?|rushing|passing|retire(?:d|ment|s)?|retiring|comes? out of retirement|returns? to play)\b/.test(
+  const hasSportsAction = /\b(wins?|make(s)? the playoffs?|hall of fame|hof|mvp|touchdowns?|tds?|interceptions?|ints?|throws?|catches?|gets?|receptions?|rushing|rush(?:es|ed)?|passing|receiving|yards?|yds?|retire(?:d|ment|s)?|retiring|comes? out of retirement|returns? to play)\b/.test(
     lower
   );
   const hasTeam = KNOWN_TEAMS.some((team) => new RegExp(`\\b${team.replace(/\s+/g, "\\s+")}\\b`, "i").test(text));
@@ -428,7 +439,7 @@ function isLikelyGibberishPrompt(prompt) {
 
 function hasMeasurableOutcomeIntent(prompt) {
   const lower = normalizePrompt(prompt);
-  return /\b(win|wins|won|make|makes|made|reach|reaches|throws?|catch(?:es)?|rush(?:es|ing)?|retire(?:d|ment|s|ing)?|returns?|comeback|playoffs?|mvp|yards?|touchdowns?|tds?|interceptions?|ints?|sacks?|record|awards?|super bowl|championship|finals?|0-17|17-0|hall of fame)\b/.test(
+  return /\b(win|wins|won|make|makes|made|reach|reaches|throws?|catch(?:es)?|rush(?:es|ing)?|gets?|retire(?:d|ment|s|ing)?|returns?|comeback|playoffs?|mvp|yards?|touchdowns?|tds?|interceptions?|ints?|receptions?|sacks?|record|awards?|super bowl|championship|finals?|0-17|17-0|hall of fame)\b/.test(
     lower
   );
 }
@@ -731,7 +742,8 @@ function applyDefaultNflSeasonInterpretation(prompt) {
 
 function applyPlayerAliases(text) {
   let out = String(text || "");
-  for (const [alias, canonical] of Object.entries(PLAYER_ALIASES)) {
+  const entries = Object.entries(PLAYER_ALIASES).sort((a, b) => b[0].length - a[0].length);
+  for (const [alias, canonical] of entries) {
     const re = new RegExp(`\\b${alias.replace(/\s+/g, "\\s+")}\\b`, "ig");
     out = out.replace(re, canonical);
   }
@@ -755,9 +767,17 @@ function normalizeNumberWords(text) {
 }
 
 function canonicalizePromptForKey(prompt) {
-  let t = applyPlayerAliases(prompt);
+  let t = String(prompt || "");
+  t = t.replace(/\bamon-ra\b(?=\s+(gets?|catches?|has|records?|receiving|yards?))/gi, "Amon-Ra St. Brown");
+  t = t.replace(/\bamon\s+ra\b(?=\s+(gets?|catches?|has|records?|receiving|yards?))/gi, "Amon-Ra St. Brown");
+  t = applyPlayerAliases(t);
   t = applyTeamAndSlangAliases(t);
   t = normalizeNumberWords(t);
+  t = t.replace(/\brushers?\s+for\b/gi, "rushes for");
+  t = t.replace(/\brushesr?\s+for\b/gi, "rushes for");
+  t = t.replace(/\brec(?:eiv|iev)ing\b/gi, "receiving");
+  t = t.replace(/\breception\b/gi, "receptions");
+  t = t.replace(/\bnfl games?\b/gi, "this season");
   t = t.toLowerCase();
   t = t.replace(/\breturns?\s+to\s+play\b/g, "comes out of retirement");
   t = t.replace(/\brecords?\s+(\d{1,2})\s+receiving\s+touchdowns?\b/g, "catches $1 touchdowns");
@@ -784,9 +804,18 @@ function canonicalizePromptForKey(prompt) {
 }
 
 function normalizePromptForModel(prompt) {
-  let t = applyPlayerAliases(prompt);
+  let t = String(prompt || "");
+  t = t.replace(/\bamon-ra\b(?=\s+(gets?|catches?|has|records?|receiving|yards?))/gi, "Amon-Ra St. Brown");
+  t = t.replace(/\bamon\s+ra\b(?=\s+(gets?|catches?|has|records?|receiving|yards?))/gi, "Amon-Ra St. Brown");
+  t = applyPlayerAliases(t);
   t = applyTeamAndSlangAliases(t);
   t = normalizeNumberWords(t);
+  t = t.replace(/\brushers?\s+for\b/gi, "rushes for");
+  t = t.replace(/\brushesr?\s+for\b/gi, "rushes for");
+  t = t.replace(/\brushed?\s+for\b/gi, "rushes for");
+  t = t.replace(/\brec(?:eiv|iev)ing\b/gi, "receiving");
+  t = t.replace(/\breception\b/gi, "receptions");
+  t = t.replace(/\bnfl games?\b/gi, "this season");
   t = t.replace(/\bmakes?\s+playoffs?\b/gi, "make the playoffs");
   t = t.replace(/\bpicks\b/gi, "interceptions");
   t = t.replace(/\bto\s+wins?\b/gi, "to win");
@@ -1002,6 +1031,14 @@ function raceBeforeProbability(perSeasonA, perSeasonB) {
   return clamp(sum, 0, 1);
 }
 
+function normalizeTwoSidedBeforeProbabilities(pABefore, pBBefore) {
+  const a = clamp(Number(pABefore) || 0, 0, 1);
+  const b = clamp(Number(pBBefore) || 0, 0, 1);
+  const total = a + b;
+  if (total <= 0.000001) return 0.5;
+  return clamp(a / total, 0.001, 0.999);
+}
+
 async function buildBeforeOtherTeamEstimate(prompt, asOfDate) {
   const parsed = parseBeforeOtherTeamIntent(prompt);
   if (!parsed) return null;
@@ -1033,8 +1070,10 @@ async function buildBeforeOtherTeamEstimate(prompt, asOfDate) {
     perA.push(clamp((seasonPctA / 100) * decay, 0.001, 0.8));
     perB.push(clamp((seasonPctB / 100) * decay, 0.001, 0.8));
   }
-  const pBefore = raceBeforeProbability(perA, perB) * 100;
-  const probPct = clamp(pBefore, 0.1, 99.0);
+  const pABefore = raceBeforeProbability(perA, perB);
+  const pBBefore = raceBeforeProbability(perB, perA);
+  const pConditional = normalizeTwoSidedBeforeProbabilities(pABefore, pBBefore) * 100;
+  const probPct = clamp(pConditional, 0.1, 99.0);
 
   const labelA = titleCaseWords(teamA);
   const labelB = titleCaseWords(teamB);
@@ -1066,6 +1105,9 @@ async function buildBeforeOtherTeamEstimate(prompt, asOfDate) {
       years,
       seasonPctA,
       seasonPctB,
+      pABeforeRaw: Number((pABefore * 100).toFixed(3)),
+      pBBeforeRaw: Number((pBBefore * 100).toFixed(3)),
+      normalizedTwoSided: true,
     },
   };
 }
@@ -1997,9 +2039,47 @@ function hasExplicitNonNflLeagueContext(prompt) {
 
 function hasNflSpecificContext(prompt) {
   const lower = normalizePrompt(prompt);
-  return /\b(nfl|super bowls?|afc|nfc|mvp|touchdowns?|tds?|interceptions?|ints?|passing yards?|qb|patriots|chiefs|bills|jets|dolphins|ravens|49ers|packers|cowboys|eagles)\b/.test(
+  return /\b(nfl|super bowls?|afc|nfc|mvp|touchdowns?|tds?|interceptions?|ints?|passing yards?|receiving yards?|rushing yards?|receptions?|rush(?:es|ing|ed)?|qb|patriots|chiefs|bills|jets|dolphins|ravens|49ers|packers|cowboys|eagles)\b/.test(
     lower
   );
+}
+
+function hasDeterministicStatPattern(prompt) {
+  const lower = normalizePrompt(numberWordsToDigits(prompt));
+  const hasNum = /\b\d{1,4}\b/.test(lower);
+  const hasOutcome = /\b(throws?|rush(?:es|ing|ed)?|runs?|gets?|catches?|has|records?)\b/.test(lower);
+  const hasMetric = /\b(yards?|yds?|touchdowns?|tds?|interceptions?|ints?|receptions?)\b/.test(lower);
+  return hasNum && hasOutcome && hasMetric;
+}
+
+function isLowVolatilityPrompt(prompt) {
+  const lower = normalizePrompt(numberWordsToDigits(prompt));
+  return (
+    /\bbefore\b/.test(lower) ||
+    /\b(by|through|thru|until|up to)\s+20\d{2}\b/.test(lower) ||
+    /\b(next|over|within)\s+\d{1,2}\s+(years|seasons)\b/.test(lower) ||
+    /\b(career|ever|all[- ]time|whole career|entire career)\b/.test(lower)
+  );
+}
+
+function stableSignature() {
+  return [
+    CACHE_VERSION,
+    API_PUBLIC_VERSION,
+    phase2Calibration?.version || "na",
+    String(nflIndexLoadedAt || 0),
+  ].join("|");
+}
+
+function storeStableIfLowVolatility(normalizedPrompt, prompt, value) {
+  if (!isLowVolatilityPrompt(prompt)) return;
+  if (!value || value.status !== "ok") return;
+  if (value.sourceType === "sportsbook") return;
+  stableOddsCache.set(normalizedPrompt, {
+    ts: Date.now(),
+    signature: stableSignature(),
+    value,
+  });
 }
 
 function isNonNflSportsPrompt(prompt) {
@@ -3918,6 +3998,12 @@ function scoreSportsDbPlayerCandidate(candidate, targetName, preferredTeamAbbr =
   const status = String(candidate?.strStatus || "").toLowerCase();
   if (preferActive && status.includes("active")) score += 3;
 
+  const sport = String(candidate?.strSport || "").toLowerCase();
+  const league = String(candidate?.strLeague || "").toLowerCase();
+  if (sport.includes("football") || league.includes("nfl") || league.includes("national football")) score += 4;
+  if (league.includes("cfl") || league.includes("xfl")) score += 1;
+  if (sport && !sport.includes("football")) score -= 6;
+
   if (candidate?.strCutout || candidate?.strRender || candidate?.strThumb) score += 1;
   return score;
 }
@@ -3938,9 +4024,20 @@ async function lookupPlayerHeadshot(player, options = {}) {
     const payload = await response.json();
     const players = Array.isArray(payload?.player) ? payload.player : [];
     if (players.length === 0) return await lookupWikipediaHeadshot(player);
+    const playerKey = normalizePersonName(player);
+    const isKnownNflName = nflPlayerIndex.get(playerKey)?.length > 0;
+    let pool = players;
+    if (isKnownNflName || preferredTeamAbbr) {
+      const nflOnly = players.filter((p) => {
+        const sport = String(p?.strSport || "").toLowerCase();
+        const league = String(p?.strLeague || "").toLowerCase();
+        return sport.includes("football") || league.includes("nfl") || league.includes("national football");
+      });
+      if (nflOnly.length) pool = nflOnly;
+    }
 
     const target = normalizePersonName(player);
-    const exact = players.find((p) => normalizePersonName(p?.strPlayer || "") === target);
+    const exact = pool.find((p) => normalizePersonName(p?.strPlayer || "") === target);
     const exactHeadshot = exact?.strCutout || exact?.strRender || exact?.strThumb || null;
     if (exactHeadshot) {
       return {
@@ -3949,7 +4046,7 @@ async function lookupPlayerHeadshot(player, options = {}) {
       };
     }
 
-    const ranked = [...players].sort(
+    const ranked = [...pool].sort(
       (a, b) =>
         scoreSportsDbPlayerCandidate(b, player, preferredTeamAbbr, preferActive) -
         scoreSportsDbPlayerCandidate(a, player, preferredTeamAbbr, preferActive)
@@ -4186,6 +4283,10 @@ app.post("/api/odds", async (req, res) => {
     const intent = parseIntent(promptForParsing);
     const semanticKey = canonicalizePromptForKey(promptForParsing);
     const normalizedPrompt = `${CACHE_VERSION}:${semanticKey}`;
+    const stableCached = stableOddsCache.get(normalizedPrompt);
+    if (stableCached && Date.now() - stableCached.ts < STABLE_CACHE_TTL_MS && stableCached.signature === stableSignature()) {
+      return res.json(stableCached.value);
+    }
     let playerHint = extractPlayerName(promptForParsing);
     const teamHint = extractTeamName(promptForParsing);
     const wholeCareerIntent = hasWholeCareerTeamIntent(promptForParsing);
@@ -4379,6 +4480,7 @@ app.post("/api/odds", async (req, res) => {
       }
       oddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
       semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
+      storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
       return res.json(stable);
     }
 
@@ -4393,6 +4495,7 @@ app.post("/api/odds", async (req, res) => {
       }
       oddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
       semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
+      storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
       return res.json(stable);
     }
 
@@ -4410,6 +4513,7 @@ app.post("/api/odds", async (req, res) => {
       }
       oddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
       semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
+      storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
       return res.json(stable);
     }
 
@@ -4427,6 +4531,7 @@ app.post("/api/odds", async (req, res) => {
       }
       oddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
       semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
+      storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
       return res.json(stable);
     }
 
@@ -4675,6 +4780,7 @@ app.post("/api/odds", async (req, res) => {
           metrics.baselineServed += 1;
           oddsCache.set(normalizedPrompt, { ts: Date.now(), value });
           semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value });
+          storeStableIfLowVolatility(normalizedPrompt, promptForParsing, value);
           return res.json(value);
         }
       }
@@ -4697,6 +4803,7 @@ app.post("/api/odds", async (req, res) => {
           const finalValue = decorateForScenarioComplexity(value, conditionalIntent, jointEventIntent);
           oddsCache.set(normalizedPrompt, { ts: Date.now(), value: finalValue });
           semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: finalValue });
+          storeStableIfLowVolatility(normalizedPrompt, promptForParsing, finalValue);
           return res.json(finalValue);
         }
       }
@@ -4720,9 +4827,9 @@ app.post("/api/odds", async (req, res) => {
       if (playerHint && !teamHint) {
         const explicitNonNfl = hasExplicitNonNflLeagueContext(promptForParsing);
         const strongSports = hasStrongSportsContext(promptForParsing);
-        const nflSpecific = hasNflSpecificContext(promptForParsing);
         const fullNameShape = /\b[a-z][a-z'.-]+\s+[a-z][a-z'.-]+\b/i.test(promptForParsing);
-        const allowNflPlayerHeuristic = nflSpecific && strongSports && fullNameShape;
+        const allowNflPlayerHeuristic = strongSports && fullNameShape;
+        const deterministicStatPrompt = hasDeterministicStatPattern(promptForParsing);
 
         const clearlyNonSports = playerStatus?.isSportsFigure === "no";
         const unclear = !playerStatus || playerStatus.isSportsFigure === "unclear";
@@ -4735,7 +4842,8 @@ app.post("/api/odds", async (req, res) => {
             !isKnownActiveMention(promptForParsing) &&
             !explicitNonNfl &&
             unclear &&
-            !strongSports))
+            !strongSports &&
+            !deterministicStatPrompt))
         ) {
           const value = buildNonSportsPersonSnarkResponse(resolvedPlayerHint || playerHint, promptForParsing);
           metrics.snarks += 1;
@@ -4968,6 +5076,7 @@ app.post("/api/odds", async (req, res) => {
       metrics.hypotheticalServed += 1;
       oddsCache.set(normalizedPrompt, { ts: Date.now(), value: finalValue });
       semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: finalValue });
+      storeStableIfLowVolatility(normalizedPrompt, promptForParsing, finalValue);
       return res.json(finalValue);
     } catch (error) {
       if (error?.name === "AbortError") {

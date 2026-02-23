@@ -26,7 +26,7 @@ const shareProbabilityOutput = document.getElementById("share-probability-output
 const shareSourceOutput = document.getElementById("share-source-output");
 const PLACEHOLDER_ROTATE_MS = 3200;
 const EXAMPLE_REFRESH_MS = 12000;
-const CLIENT_API_VERSION = "2026.02.21.4";
+const CLIENT_API_VERSION = "2026.02.21.6";
 
 const DEFAULT_EXAMPLE_POOL = [
   "Josh Allen throws 30 touchdowns this season",
@@ -342,9 +342,10 @@ async function createShareBlob() {
   if (!window.html2canvas) {
     throw new Error("Share renderer unavailable.");
   }
+  const isiOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
   const canvas = await window.html2canvas(shareCard, {
-    backgroundColor: null,
-    scale: 2,
+    backgroundColor: "#1e1810",
+    scale: isiOS ? 1.25 : 1.6,
     useCORS: true,
     logging: false,
   });
@@ -353,7 +354,7 @@ async function createShareBlob() {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
       else reject(new Error("Could not build image."));
-    }, "image/png");
+    }, "image/jpeg", 0.9);
   });
 }
 
@@ -365,10 +366,14 @@ async function shareCurrentResult() {
   shareBtn.textContent = "Preparing...";
   try {
     const blob = await createShareBlob();
-    const file = new File([blob], "egomaniacs-odds.png", { type: "image/png" });
+    const file = new File([blob], "egomaniacs-odds.jpg", { type: "image/jpeg" });
     const shareText = `${promptSummary.textContent} — ${oddsOutput.textContent}`;
 
-    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+    const canShareFiles =
+      typeof navigator.share === "function" &&
+      typeof navigator.canShare === "function" &&
+      navigator.canShare({ files: [file] });
+    if (canShareFiles) {
       await navigator.share({
         files: [file],
         title: "What Are the Odds?",
@@ -381,7 +386,7 @@ async function shareCurrentResult() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "egomaniacs-odds.png";
+    link.download = "egomaniacs-odds.jpg";
     document.body.appendChild(link);
     link.click();
     link.remove();

@@ -192,7 +192,13 @@ function parseSeasonStatIntent(prompt) {
   const p = String(prompt || "").toLowerCase();
   const seasonLike = /\b(this year|this season|next year|next season|in \d{4}|season)\b/.test(p);
   if (!seasonLike) return null;
-  const passing = p.match(/\bthrows?\s+(?:for\s+)?(\d{1,4})\s+(passing\s+yards?|yards?|yds?|interceptions?|ints?|picks?|tds?|touchdowns?)\b/);
+  const normalized = p
+    .replace(/\brushers?\s+for\b/g, "rushes for")
+    .replace(/\brushesr?\s+for\b/g, "rushes for")
+    .replace(/\brec(?:eiv|iev)ing\b/g, "receiving")
+    .replace(/\breception\b/g, "receptions");
+
+  const passing = normalized.match(/\bthrows?\s+(?:for\s+)?(\d{1,4})\s+(passing\s+yards?|yards?|yds?|interceptions?|ints?|picks?|tds?|touchdowns?)\b/);
   if (passing) {
     const threshold = Number(passing[1]);
     const metricWord = passing[2] || "";
@@ -201,31 +207,31 @@ function parseSeasonStatIntent(prompt) {
     return { metric: /\bint|interception|pick\b/.test(metricWord) ? "passing_interceptions" : "passing_tds", threshold };
   }
 
-  const receivingTds = p.match(/\b(?:catches?|receives?|has)\s+(?:for\s+)?(\d{1,2})\s+(receiving\s+)?(tds?|touchdowns?)\b/);
+  const receivingTds = normalized.match(/\b(?:catches?|receives?|gets?|has)\s+(?:for\s+)?(\d{1,2})\s+(receiving\s+)?(tds?|touchdowns?)\b/);
   if (receivingTds) {
     const threshold = Number(receivingTds[1]);
     if (Number.isFinite(threshold) && threshold >= 1) return { metric: "receiving_tds", threshold };
   }
 
-  const rushingTds = p.match(/\b(?:rush(?:es|ing)?|runs?)\s+(?:for\s+)?(\d{1,2})\s+(rushing\s+)?(tds?|touchdowns?)\b/);
+  const rushingTds = normalized.match(/\b(?:rush(?:es|ing|ed)?|runs?)\s+(?:for\s+)?(\d{1,2})\s+(rushing\s+)?(tds?|touchdowns?)\b/);
   if (rushingTds) {
     const threshold = Number(rushingTds[1]);
     if (Number.isFinite(threshold) && threshold >= 1) return { metric: "rushing_tds", threshold };
   }
 
-  const receivingYards = p.match(/\b(?:for|gets?|has|records?)\s+(\d{2,4})\s+(receiving\s+)?(yards?|yds?)\b/);
-  if (receivingYards && /\b(receiv\w*|catch\w*)\b/.test(p)) {
+  const receivingYards = normalized.match(/\b(?:for|gets?|has|records?)\s+(\d{2,4})\s+(receiving\s+)?(yards?|yds?)\b/);
+  if (receivingYards && /\b(receiv\w*|catch\w*)\b/.test(normalized)) {
     const threshold = Number(receivingYards[1]);
     if (Number.isFinite(threshold) && threshold >= 10) return { metric: "receiving_yards", threshold };
   }
 
-  const rushingYards = p.match(/\b(?:rush(?:es|ing)?|runs?)\s+(?:for\s+)?(\d{2,4})\s+(yards?|yds?)\b/);
+  const rushingYards = normalized.match(/\b(?:rush(?:es|ing|ed)?|runs?)\s+(?:for\s+)?(\d{2,4})\s+(yards?|yds?)\b/);
   if (rushingYards) {
     const threshold = Number(rushingYards[1]);
     if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold };
   }
 
-  const receptions = p.match(/\b(?:catches?|has|records?)\s+(\d{2,3})\s+(receptions?|catches?)\b/);
+  const receptions = normalized.match(/\b(?:catches?|gets?|has|records?)\s+(\d{2,3})\s+(receptions?|catches?)\b/);
   if (receptions) {
     const threshold = Number(receptions[1]);
     if (Number.isFinite(threshold) && threshold >= 5) return { metric: "receptions", threshold };
@@ -313,9 +319,12 @@ function buildPlayerSeasonLambda(profile, metric, calibration, asOfDate) {
   const intMeans = model.passingInterceptionsMean || { elite: 9, high: 10.5, young: 12.5, default: 11 };
   // Retuned to 2025-26-friendly scoring environment with starter-centric priors.
   const tdMeans = model.passingTdsMean || { elite: 33, high: 28, young: 22, default: 24 };
+  const yardsMeans = model.passingYardsMean || { elite: 4650, high: 4250, young: 3650, default: 3900 };
   const fallback = metric === "passing_interceptions"
     ? Number(intMeans[tier] ?? intMeans.default ?? 11)
-    : Number(tdMeans[tier] ?? tdMeans.default ?? 27);
+    : metric === "passing_yards"
+      ? Number(yardsMeans[tier] ?? yardsMeans.default ?? 3900)
+      : Number(tdMeans[tier] ?? tdMeans.default ?? 27);
 
   const dataset = loadQbSeasonData();
   const yearsExp = Number(profile?.yearsExp || 0);
@@ -378,6 +387,26 @@ function buildPlayerSeasonLambda(profile, metric, calibration, asOfDate) {
   const reliability = clamp(reliabilityBase * (staleYears >= 1 ? 0.82 : 1), 0.18, 0.76);
   const playerSignal = clamp(((recent ?? longRunMean) * 0.72 + longRunMean * 0.28) * starterFactor, 1, 70);
   let lambda = clamp(playerSignal * reliability + fallback * (1 - reliability), 0.8, 75);
+  if (metric === "passing_yards") {
+    const recentAttempts = Number(valid[0]?.passingAttempts || 0);
+    const recentGames = Number(valid[0]?.games || 0);
+    const attPerGame = recentGames > 0 ? recentAttempts / recentGames : 31.5;
+    const projectedAttempts = clamp(attPerGame * 16.5, 380, 690);
+    const ypaByTier = { elite: 7.5, high: 7.2, young: 6.9, default: 7.0 };
+    const ypa = ypaByTier[tier] ?? ypaByTier.default;
+    const yardsFromAttempts = projectedAttempts * ypa;
+    lambda = clamp(yardsFromAttempts * reliability + fallback * (1 - reliability), 2100, 5600);
+    return {
+      lambda,
+      modelType: "player_history_blended",
+      sampleSeasons: valid.length,
+      recentAttempts,
+      recentGames,
+      reliability,
+      staleYears,
+      yearsExp,
+    };
+  }
   if (metric === "passing_tds" && yearsExp <= 2) lambda *= 1.07;
   if (metric === "passing_interceptions" && yearsExp <= 2) lambda *= 1.08;
   lambda = clamp(lambda, 0.8, 75);
@@ -484,6 +513,7 @@ export function buildPlayerSeasonStatEstimate(prompt, intent, profile, asOfDate,
   if (parsed.metric === "passing_interceptions") dispersion += 1.6;
   if (["rushing_tds", "receiving_tds"].includes(parsed.metric)) dispersion += 0.5;
   if (["rushing_yards", "receiving_yards", "receptions"].includes(parsed.metric)) dispersion += 1.4;
+  if (parsed.metric === "passing_yards") dispersion += 9.5;
   const variance = lambda + (lambda * lambda) / Math.max(0.8, dispersion);
   const sigma = Math.sqrt(Math.max(1, variance));
   let tailProb = parsed.threshold >= 120 || lambda >= 120
@@ -529,6 +559,11 @@ export function buildPlayerSeasonStatEstimate(prompt, intent, profile, asOfDate,
   }
   if (parsed.metric === "passing_tds" && parsed.threshold <= 5) {
     probabilityPct = Math.max(probabilityPct, 99.95);
+  }
+  if (parsed.metric === "passing_yards") {
+    const yardsSigma = clamp(360 + lambda * 0.08, 340, 900);
+    tailProb = normalTailAtLeast(lambda, yardsSigma, parsed.threshold);
+    probabilityPct = clamp(tailProb * 100, 0.01, 99.9);
   }
 
   return {

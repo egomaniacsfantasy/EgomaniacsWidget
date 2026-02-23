@@ -367,25 +367,40 @@ button {
   position: fixed;
   left: -99999px;
   top: -99999px;
-  width: 720px;
+  width: 1200px;
   padding: 0;
   margin: 0;
 }
 
 .share-card-shell {
-  width: 720px;
-  min-height: 960px;
-  border-radius: 36px;
+  width: 1200px;
+  min-height: 630px;
+  border-radius: 28px;
   border: 1px solid rgba(243, 225, 188, 0.24);
   background:
-    radial-gradient(circle at 14% 8%, rgba(215, 164, 65, 0.35), transparent 35%),
-    radial-gradient(circle at 90% 12%, rgba(184, 68, 32, 0.26), transparent 34%),
+    radial-gradient(circle at 14% 8%, rgba(215, 164, 65, 0.25), transparent 36%),
+    radial-gradient(circle at 90% 12%, rgba(184, 68, 32, 0.2), transparent 34%),
     linear-gradient(160deg, #1d170f 0%, #241b12 50%, #17110a 100%);
   color: #f3ead6;
-  padding: 48px 50px 44px;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  padding: 36px 40px 32px;
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.4);
+  display: grid;
+  grid-template-columns: 46% 54%;
+  gap: 24px;
+  align-items: stretch;
+}
+
+.share-pane {
   display: flex;
   flex-direction: column;
+}
+
+.share-pane-left {
+  justify-content: space-between;
+}
+
+.share-pane-right {
+  justify-content: center;
 }
 
 .share-kicker {
@@ -397,46 +412,46 @@ button {
 }
 
 .share-title {
-  margin: 8px 0 2px;
+  margin: 8px 0 8px;
   font-family: "Instrument Serif", serif;
   font-weight: 400;
-  font-size: 4.1rem;
+  font-size: 3.45rem;
   line-height: 1;
   color: #f4ebd9;
 }
 
 .share-subtitle {
-  margin: 0 0 34px;
-  font-size: 1.08rem;
+  margin: 0 0 14px;
+  font-size: 1rem;
   color: #d5c5a7;
 }
 
 .share-odds {
-  margin: 0 0 18px;
-  font-size: 7.2rem;
+  margin: 0 0 12px;
+  font-size: 5.5rem;
   line-height: 0.95;
   letter-spacing: -0.03em;
   font-weight: 700;
   color: #f6edd9;
-  text-align: center;
+  text-align: left;
 }
 
 .share-summary {
-  margin: 0 auto 28px;
+  margin: 0 0 14px;
   width: 100%;
   border: 1px solid rgba(243, 225, 188, 0.26);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.05);
-  padding: 16px 20px;
-  text-align: center;
-  font-size: 1.55rem;
+  padding: 14px 16px;
+  text-align: left;
+  font-size: 1.35rem;
   line-height: 1.2;
   font-weight: 700;
   color: #f4ead4;
 }
 
 .share-meta {
-  margin-top: auto;
+  align-self: end;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
@@ -452,15 +467,15 @@ button {
 
 .share-meta-value {
   margin: 8px 0 0;
-  font-size: 1.4rem;
+  font-size: 1.25rem;
   font-weight: 700;
   color: #f2e9d6;
 }
 
 .share-disclaimer {
-  margin: 24px 0 0;
-  text-align: center;
-  font-size: 0.9rem;
+  margin: 10px 0 0;
+  text-align: left;
+  font-size: 0.82rem;
   color: #b9ab92;
 }
 

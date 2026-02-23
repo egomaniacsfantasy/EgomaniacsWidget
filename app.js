@@ -40,7 +40,7 @@ const feedbackDownBtn = document.getElementById("feedback-down");
 const feedbackThanks = document.getElementById("feedback-thanks");
 const PLACEHOLDER_ROTATE_MS = 3200;
 const EXAMPLE_REFRESH_MS = 12000;
-const CLIENT_API_VERSION = "2026.02.23.9";
+const CLIENT_API_VERSION = "2026.02.23.10";
 const FEEDBACK_RATED_MAP_KEY = "ewa_feedback_rated_map";
 const FEEDBACK_SESSION_ID_KEY = "ewa_feedback_session_id";
 
@@ -283,12 +283,11 @@ async function submitFeedback(vote) {
   feedbackUpBtn?.setAttribute("disabled", "true");
   feedbackDownBtn?.setAttribute("disabled", "true");
   feedbackPop.classList.add("feedback-thanked");
-  feedbackThanks.classList.remove("hidden");
+  feedbackThanks.classList.add("hidden");
   feedbackQuestion.textContent = "Thanks for your feedback!";
-  statusLine.textContent = "Thanks for your feedback.";
   setTimeout(() => {
     closeFeedbackPopAnimated();
-  }, 520);
+  }, 1800);
 
   const body = {
     vote,

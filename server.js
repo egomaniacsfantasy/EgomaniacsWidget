@@ -25,7 +25,7 @@ const ODDS_API_BASE = process.env.ODDS_API_BASE || "https://api.the-odds-api.com
 const ODDS_API_REGIONS = process.env.ODDS_API_REGIONS || "us";
 const ODDS_API_BOOKMAKERS = process.env.ODDS_API_BOOKMAKERS || "draftkings,fanduel";
 const CACHE_VERSION = "v42";
-const API_PUBLIC_VERSION = "2026.02.23.9";
+const API_PUBLIC_VERSION = "2026.02.23.10";
 const DEFAULT_NFL_SEASON = process.env.DEFAULT_NFL_SEASON || "2025-26";
 const oddsCache = new Map();
 const PLAYER_STATUS_TIMEOUT_MS = Number(process.env.PLAYER_STATUS_TIMEOUT_MS || 7000);
@@ -2570,7 +2570,9 @@ async function estimateCareerSuperBowlOdds(prompt, playerName, localPlayerStatus
     impliedProbability: `${probabilityPct.toFixed(1)}%`,
     confidence: "High",
     assumptions: [
-      `${teamName} current Super Bowl reference used as base (${sbRef?.odds || "market unavailable"}).`,
+      sbRef?.odds
+        ? `${teamName} current Super Bowl reference used as base (${sbRef.odds}).`
+        : `${teamName} baseline strength prior used as base for this career projection.`,
       `Career window modeled over ~${yearsRemaining} seasons with NFL parity decay.`,
       `Historical cap applied for ${countLabel} Super Bowl wins by ${posGroup.toUpperCase()} careers.`,
     ],
@@ -4370,7 +4372,7 @@ async function buildSeasonTeamTitleFallback(prompt, asOfDate) {
     impliedProbability: `${seasonPct.toFixed(1)}%`,
     confidence: "Medium",
     assumptions: [
-      "Live sportsbook line unavailable at request time.",
+      "Live line was not available in-feed at request time; deterministic baseline used.",
       "Deterministic season baseline used for this futures market.",
     ],
     playerName: null,
@@ -4518,7 +4520,7 @@ function toAmericanOdds(probPct) {
   const p = clamp(probPct / 100, 0.001, 0.999);
   const raw = p >= 0.5 ? -Math.round((p / (1 - p)) * 100) : Math.round(((1 - p) / p) * 100);
   const absRaw = Math.abs(raw);
-  const step = absRaw > 5000 ? 500 : absRaw > 1000 ? 10 : 5;
+  const step = absRaw >= 5000 ? 500 : absRaw > 500 ? 10 : 5;
   const rounded = Math.round(raw / step) * step;
   if (rounded > 0) return `+${rounded}`;
   return `${rounded}`;
@@ -5801,7 +5803,7 @@ async function buildOrderedEntityAssets(prompt, maxEntities = 6) {
       ? knownPlayers.map((p) => p.name).filter(Boolean)
       : extractPlayerNamesFromPrompt(prompt, 8);
   const teams = extractKnownTeamTokens(prompt, 8);
-  const prefersQb = /\b(mvp|most valuable player|passing|pass tds?|quarterback|qb)\b/i.test(String(prompt || ""));
+  const prefersQb = /\b(mvp|most valuable player|passing|pass tds?|pass td|throws?|throwing|quarterback|qb)\b/i.test(String(prompt || ""));
   const combined = [];
   const promptLower = normalizeEntityName(prompt);
 
@@ -5932,6 +5934,84 @@ async function buildTeamAssetsInPromptOrder(teamTokens = []) {
   return out;
 }
 
+function shortLastNameLabel(name = "") {
+  const parts = String(name || "")
+    .replace(/\b(Jr\.?|Sr\.?|II|III|IV|V)\b/gi, "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : String(name || "").trim();
+}
+
+function teamAbbrFromAnyName(teamName = "") {
+  const abbr = extractNflTeamAbbr(teamName);
+  return abbr || String(teamName || "").trim();
+}
+
+function isPlausiblePlayerContextForPrompt(info = {}, prompt = "") {
+  const p = String(prompt || "").toLowerCase();
+  const pos = String(info.position || "").toUpperCase().trim();
+  if (!pos) return true;
+  if (/\b(pass|passing|throws?|td pass|passing td)\b/.test(p)) {
+    return pos === "QB";
+  }
+  if (/\b(receiving|receptions?|catches?|targets?)\b/.test(p)) {
+    return pos === "WR" || pos === "TE" || pos === "RB";
+  }
+  if (/\b(rushing|rushes?|carries?)\b/.test(p)) {
+    return pos === "RB" || pos === "QB" || pos === "WR";
+  }
+  return true;
+}
+
+function buildSituationContextAssumptions(entityAssets = [], currentAssumptions = [], prompt = "") {
+  const assets = Array.isArray(entityAssets) ? entityAssets : [];
+  const lines = [];
+  const players = assets.filter((a) => String(a?.kind || "").toLowerCase() === "player");
+  const teams = assets.filter((a) => String(a?.kind || "").toLowerCase() === "team");
+
+  if (players.length) {
+    const playerBits = players
+      .filter((a) => isPlausiblePlayerContextForPrompt(a?.info || {}, prompt))
+      .slice(0, 3)
+      .map((a) => {
+      const info = a?.info || {};
+      const nm = shortLastNameLabel(info.name || a?.name || "");
+      const pos = String(info.position || "").trim();
+      const teamAbbr = teamAbbrFromAnyName(info.team || "");
+      const left = pos ? `${nm} (${pos})` : nm;
+      return teamAbbr ? `${left} - ${teamAbbr}` : left;
+      });
+    if (playerBits.length) {
+      lines.push(`Player context: ${playerBits.join("; ")}.`);
+    }
+  }
+
+  if (teams.length) {
+    const teamBits = teams.slice(0, 4).map((a) => {
+      const info = a?.info || {};
+      const abbr = teamAbbrFromAnyName(info.team || a?.name || "");
+      const sb = String(info.superBowlOdds || "").trim();
+      return sb ? `${abbr} ${sb}` : `${abbr}`;
+    });
+    if (teamBits.length) {
+      lines.push(`Team strength priors: ${teamBits.join(" | ")} (Super Bowl baseline odds).`);
+    }
+  }
+
+  const merged = [...lines, ...(Array.isArray(currentAssumptions) ? currentAssumptions : [])]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
+  const seen = new Set();
+  const deduped = merged.filter((x) => {
+    const k = x.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return deduped.slice(0, 4);
+}
+
 async function enrichEntityMedia(
   prompt,
   baseValue,
@@ -5941,12 +6021,14 @@ async function enrichEntityMedia(
 ) {
   const team = teamNameHint || extractTeamName(prompt);
   const player = playerNameHint || extractPlayerName(prompt);
+  const promptPrefersQb = /\b(passing|pass tds?|pass td|throws?|throwing|quarterback|qb)\b/i.test(String(prompt || ""));
+  const preferredPosition = options.preferredPosition || (promptPrefersQb ? "QB" : "");
   const teamAsset = await lookupTeamLogo(team);
   const preferredTeamAbbr = options.preferredTeamAbbr || "";
   const preferActive = Boolean(options.preferActive);
   const playerAsset = teamAsset
     ? null
-    : await lookupPlayerHeadshot(player, { preferredTeamAbbr, preferActive });
+    : await lookupPlayerHeadshot(player, { preferredTeamAbbr, preferActive, preferredPosition });
 
   let secondaryPlayerName = null;
   let secondaryHeadshotUrl = null;
@@ -5976,7 +6058,11 @@ async function enrichEntityMedia(
     const primaryKey = normalizePersonName(playerAsset?.playerName || player || "");
     const secondary = candidates.find((name) => normalizePersonName(name) && normalizePersonName(name) !== primaryKey);
     if (secondary) {
-      const secondaryAsset = await lookupPlayerHeadshot(secondary, { preferredTeamAbbr: "", preferActive: true });
+      const secondaryAsset = await lookupPlayerHeadshot(secondary, {
+        preferredTeamAbbr: "",
+        preferActive: true,
+        preferredPosition,
+      });
       if (secondaryAsset?.headshotUrl) {
         secondaryPlayerName = secondaryAsset.playerName || secondary;
         secondaryHeadshotUrl = secondaryAsset.headshotUrl;
@@ -6014,6 +6100,7 @@ async function enrichEntityMedia(
 
   return {
     ...baseValue,
+    assumptions: buildSituationContextAssumptions(entityAssets, baseValue?.assumptions),
     playerName: playerAsset?.playerName || null,
     headshotUrl: playerAsset?.headshotUrl || teamAsset?.imageUrl || null,
     playerInfo,
@@ -6189,7 +6276,10 @@ function applyConsistencyAndTrack(args) {
   if (out && out.status === "ok") {
     const nerd = buildNerdAssumptions(out, args?.prompt || "");
     const clean = sanitizeAssumptionsForUI(out.assumptions);
-    out.assumptions = sanitizeAssumptionsForUI(nerd.length ? nerd : clean);
+    const base = nerd.length ? nerd : clean;
+    out.assumptions = sanitizeAssumptionsForUI(
+      buildSituationContextAssumptions(out.entityAssets, base, args?.prompt || "")
+    );
   }
   const after = JSON.stringify({
     odds: out?.odds,

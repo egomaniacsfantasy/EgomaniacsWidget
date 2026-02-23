@@ -769,9 +769,6 @@ function applyDefaultNflSeasonInterpretation(prompt) {
   if (!/\bthis season\b/i.test(text) && !/\bseason\b/i.test(text)) {
     text = `${text} this season`;
   }
-  if (!new RegExp(`\\b${String(DEFAULT_NFL_SEASON).replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\b`, "i").test(text)) {
-    text = `${text} (${DEFAULT_NFL_SEASON} NFL season)`;
-  }
   return text.replace(/\s+/g, " ").trim();
 }
 
@@ -6802,7 +6799,17 @@ app.post("/api/odds", async (req, res) => {
     const baseline = buildBaselineEstimate(promptForParsing, intent, new Date().toISOString().slice(0, 10));
     if (baseline) {
       metrics.baselineServed += 1;
-      let stable = applyConsistencyAndTrack({ prompt: promptForParsing, intent, result: baseline });
+      let stable = await enrichEntityMedia(
+        promptForParsing,
+        baseline,
+        baseline.playerName || "",
+        extractTeamName(promptForParsing) || "",
+        {
+          preferredTeamAbbr: extractNflTeamAbbr(promptForParsing) || "",
+          preferActive: true,
+        }
+      );
+      stable = applyConsistencyAndTrack({ prompt: promptForParsing, intent, result: stable });
       stable = decorateForScenarioComplexity(stable, conditionalIntent, jointEventIntent);
       if (FEATURE_ENABLE_TRACE) {
         stable.trace = { ...(stable.trace || {}), intent, canonicalPromptKey: semanticKey, apiVersion: API_PUBLIC_VERSION };

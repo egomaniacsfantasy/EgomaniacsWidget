@@ -42,7 +42,7 @@ body::before {
     radial-gradient(circle at 18% 12%, rgba(255, 223, 120, 0.14), transparent 34%),
     radial-gradient(circle at 82% 14%, rgba(255, 160, 124, 0.13), transparent 36%),
     radial-gradient(circle at 50% 78%, rgba(196, 132, 56, 0.12), transparent 40%);
-  animation: ambientGradientShift 24s ease-in-out infinite alternate;
+  animation: ambientGradientShift 18s ease-in-out infinite alternate;
 }
 
 .bg-shape {
@@ -347,8 +347,8 @@ button {
 }
 
 .entity-avatar {
-  width: 92px;
-  height: 92px;
+  width: 98px;
+  height: 98px;
   margin-left: -13px;
   border-radius: 999px;
   border: 1px solid rgba(243, 225, 188, 0.35);
@@ -523,6 +523,27 @@ button {
   grid-template-columns: auto 1fr;
   gap: 6px 10px;
   align-items: center;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.headshot-profile-pop.no-logo {
+  grid-template-columns: 1fr;
+}
+
+.headshot-profile-pop.no-logo .headshot-profile-name {
+  grid-column: 1;
+}
+
+.headshot-profile-pop.profile-enter {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.headshot-profile-pop.profile-leave {
+  opacity: 0;
+  transform: translateY(5px);
 }
 
 .headshot-profile-logo {

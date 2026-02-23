@@ -25,7 +25,7 @@ const ODDS_API_BASE = process.env.ODDS_API_BASE || "https://api.the-odds-api.com
 const ODDS_API_REGIONS = process.env.ODDS_API_REGIONS || "us";
 const ODDS_API_BOOKMAKERS = process.env.ODDS_API_BOOKMAKERS || "draftkings,fanduel";
 const CACHE_VERSION = "v42";
-const API_PUBLIC_VERSION = "2026.02.23.8";
+const API_PUBLIC_VERSION = "2026.02.23.9";
 const DEFAULT_NFL_SEASON = process.env.DEFAULT_NFL_SEASON || "2025-26";
 const oddsCache = new Map();
 const PLAYER_STATUS_TIMEOUT_MS = Number(process.env.PLAYER_STATUS_TIMEOUT_MS || 7000);
@@ -1292,6 +1292,16 @@ function defaultSeasonPctForTeamMarket(teamToken, market) {
   return base;
 }
 
+function deriveMarketPctFromSuperBowlPct(sbPct, market) {
+  const p = clamp(Number(sbPct) || 0, 0.1, 95);
+  if (market === "super_bowl_winner") return p;
+  if (market === "afc_winner" || market === "nfc_winner") return clamp(p * 1.9, 0.4, 55);
+  if (/^nfl_(afc|nfc)_(east|west|north|south)_winner$/i.test(String(market || ""))) {
+    return clamp(p * 3.8, 0.8, 75);
+  }
+  return p;
+}
+
 function raceBeforeProbability(perSeasonA, perSeasonB) {
   const n = Math.min(perSeasonA.length, perSeasonB.length);
   let survive = 1;
@@ -1374,10 +1384,21 @@ async function buildBeforeOtherTeamEstimate(prompt, asOfDate) {
   const refs = await Promise.all(
     teams.map((team) => getSportsbookReferenceByTeamAndMarket(team, market))
   );
+  const sbRefs = await Promise.all(
+    teams.map((team) => getSportsbookReferenceByTeamAndMarket(team, "super_bowl_winner"))
+  );
   const seasonPcts = teams.map((team, idx) => {
     const ref = refs[idx];
+    const sbRef = sbRefs[idx];
     let pct = ref ? Number(String(ref.impliedProbability || "").replace("%", "")) : null;
-    if (!Number.isFinite(pct) || pct <= 0) pct = defaultSeasonPctForTeamMarket(team, market);
+    if (!Number.isFinite(pct) || pct <= 0) {
+      const sbPct = sbRef ? Number(String(sbRef.impliedProbability || "").replace("%", "")) : null;
+      if (Number.isFinite(sbPct) && sbPct > 0) {
+        pct = deriveMarketPctFromSuperBowlPct(sbPct, market);
+      } else {
+        pct = defaultSeasonPctForTeamMarket(team, market);
+      }
+    }
     return clamp(pct, 0.2, 70);
   });
   const perEntity = teams.map((_, idx) => {
@@ -1389,32 +1410,46 @@ async function buildBeforeOtherTeamEstimate(prompt, asOfDate) {
     return arr;
   });
 
-  const firstProbs = perEntity.map((_, idx) => raceFirstProbability(perEntity, idx));
-  const totalFirst = firstProbs.reduce((acc, p) => acc + p, 0);
-  const pConditional = totalFirst > 0.000001 ? firstProbs[0] / totalFirst : 0.5;
+  const pairwiseBefore = opponents.map((_, oppIdx) => {
+    const pABefore = raceBeforeProbability(perEntity[0], perEntity[oppIdx + 1]);
+    const pBBefore = raceBeforeProbability(perEntity[oppIdx + 1], perEntity[0]);
+    return normalizeTwoSidedBeforeProbabilities(pABefore, pBBefore);
+  });
+  const hardest = pairwiseBefore.length ? Math.min(...pairwiseBefore) : 0.5;
+  const others = pairwiseBefore.slice(1);
+  const supportMean = others.length
+    ? others.reduce((acc, v) => acc + v, 0) / others.length
+    : pairwiseBefore[0] || hardest || 0.5;
+  const pConditional = clamp(hardest * (0.92 + 0.08 * clamp(supportMean, 0, 1)), 0.001, 0.999);
   const probPct = clamp(pConditional * 100, 0.1, 99.0);
 
-  const hasAnchors = refs.some(Boolean);
+  const hasAnchors = refs.some(Boolean) || sbRefs.some(Boolean);
   const shortA = shortTeamLabel(teamA);
   const shortOpps = opponents.map((t) => shortTeamLabel(t));
   const tag = shortMarketTag(market);
   const conciseLabel = tag
     ? `${shortA} ${tag} before ${joinWithAnd(shortOpps)}`
     : `${titleCaseWords(teamA)} before ${joinWithAnd(opponents.map((t) => titleCaseWords(t)))}`;
+  const orderedTeamAssets = await buildTeamAssetsInPromptOrder(teams);
   return {
     status: "ok",
     odds: toAmericanOdds(probPct),
     impliedProbability: `${probPct.toFixed(1)}%`,
     confidence: hasAnchors ? "High" : "Medium",
     assumptions: [
-      "Comparative race model used across all referenced teams (not pairwise-only).",
-      "Season-level market probabilities are compounded over time with year-over-year decay.",
+      "Pairwise race probability is anchored on the toughest opponent, then softly adjusted for additional teams.",
+      "Season-level team strength is compounded over time with year-over-year decay.",
     ],
     playerName: null,
     headshotUrl: null,
     summaryLabel: conciseLabel,
+    entityAssets: orderedTeamAssets,
     liveChecked: hasAnchors,
-    asOfDate: refs.find((r) => r?.asOfDate)?.asOfDate || asOfDate || new Date().toISOString().slice(0, 10),
+    asOfDate:
+      refs.find((r) => r?.asOfDate)?.asOfDate ||
+      sbRefs.find((r) => r?.asOfDate)?.asOfDate ||
+      asOfDate ||
+      new Date().toISOString().slice(0, 10),
     sourceType: hasAnchors ? "hybrid_anchored" : "historical_model",
     sourceLabel: hasAnchors
       ? "Comparative model anchored to live market"
@@ -1427,8 +1462,10 @@ async function buildBeforeOtherTeamEstimate(prompt, asOfDate) {
       market,
       years,
       seasonPcts: seasonPcts.map((v) => Number(v.toFixed(3))),
-      firstProbs: firstProbs.map((v) => Number((v * 100).toFixed(3))),
-      normalizedMultiSide: true,
+      pairwiseBefore: pairwiseBefore.map((v) => Number((v * 100).toFixed(3))),
+      hardestBefore: Number((hardest * 100).toFixed(3)),
+      supportMean: Number((supportMean * 100).toFixed(3)),
+      multiSideDamped: true,
     },
   };
 }
@@ -5667,6 +5704,13 @@ async function lookupWikipediaHeadshot(player) {
 
 async function lookupTeamLogo(team) {
   if (!team) return null;
+  const nflAbbr = extractNflTeamAbbr(team);
+  if (nflAbbr) {
+    return {
+      entityName: NFL_TEAM_DISPLAY[nflAbbr] || team,
+      imageUrl: `https://a.espncdn.com/i/teamlogos/nfl/500/${String(nflAbbr).toLowerCase()}.png`,
+    };
+  }
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), HEADSHOT_TIMEOUT_MS);
@@ -5826,14 +5870,11 @@ async function buildOrderedEntityAssets(prompt, maxEntities = 6) {
         info: profile
           ? {
               kind: "player",
-              name: profile.name,
+              name: String(profile.name || "").trim(),
               team: teamName,
               position: profile.position || "",
-              age: Number.isFinite(Number(profile.age)) ? Number(profile.age) : null,
-              yearsExp: Number.isFinite(Number(profile.yearsExp)) ? Number(profile.yearsExp) : null,
-              status: profile.status || "",
               teamLogoUrl,
-              superBowlOdds,
+              superBowlOdds: superBowlOdds || toAmericanOdds(defaultSeasonPctForTeamMarket(teamName, "super_bowl_winner")),
             }
           : null,
       });
@@ -5850,17 +5891,45 @@ async function buildOrderedEntityAssets(prompt, maxEntities = 6) {
         imageUrl: logo.imageUrl,
         info: {
           kind: "team",
-          name: logo.entityName || titleCaseWords(ent.name),
+          name: String(logo.entityName || titleCaseWords(ent.name)).trim(),
           team: logo.entityName || titleCaseWords(ent.name),
           position: "Team",
-          status: "active",
           teamLogoUrl: logo.imageUrl,
-          superBowlOdds: sbRef?.odds || "",
+          superBowlOdds:
+            sbRef?.odds ||
+            toAmericanOdds(defaultSeasonPctForTeamMarket(logo.entityName || ent.name, "super_bowl_winner")),
         },
       });
     }
   }
   return assets;
+}
+
+async function buildTeamAssetsInPromptOrder(teamTokens = []) {
+  const ordered = Array.isArray(teamTokens) ? teamTokens.filter(Boolean) : [];
+  const out = [];
+  for (const token of ordered) {
+    const logo = await lookupTeamLogo(token);
+    if (!logo?.imageUrl) continue;
+    const teamName = logo.entityName || titleCaseWords(token);
+    const sbRef = await getSportsbookReferenceByTeamAndMarket(teamName, "super_bowl_winner");
+    out.push({
+      kind: "team",
+      name: teamName,
+      imageUrl: logo.imageUrl,
+      info: {
+        kind: "team",
+        name: String(teamName || "").trim(),
+        team: teamName,
+        position: "Team",
+        teamLogoUrl: logo.imageUrl,
+        superBowlOdds:
+          sbRef?.odds ||
+          toAmericanOdds(defaultSeasonPctForTeamMarket(teamName, "super_bowl_winner")),
+      },
+    });
+  }
+  return out;
 }
 
 async function enrichEntityMedia(
@@ -5893,14 +5962,13 @@ async function enrichEntityMedia(
       ]);
       playerInfo = {
         kind: "player",
-        name: primaryProfile.name,
+        name: String(primaryProfile.name || "").trim(),
         team: primaryTeamName,
         position: primaryProfile.position || "",
-        age: Number.isFinite(Number(primaryProfile.age)) ? Number(primaryProfile.age) : null,
-        yearsExp: Number.isFinite(Number(primaryProfile.yearsExp)) ? Number(primaryProfile.yearsExp) : null,
-        status: primaryProfile.status || "",
         teamLogoUrl: primaryTeamLogo?.imageUrl || "",
-        superBowlOdds: primarySbRef?.odds || "",
+        superBowlOdds:
+          primarySbRef?.odds ||
+          toAmericanOdds(defaultSeasonPctForTeamMarket(primaryTeamName, "super_bowl_winner")),
       };
     }
 
@@ -5922,14 +5990,13 @@ async function enrichEntityMedia(
         ]);
         secondaryPlayerInfo = {
           kind: "player",
-          name: secondaryProfile.name,
+          name: String(secondaryProfile.name || "").trim(),
           team: secondaryTeamName,
           position: secondaryProfile.position || "",
-          age: Number.isFinite(Number(secondaryProfile.age)) ? Number(secondaryProfile.age) : null,
-          yearsExp: Number.isFinite(Number(secondaryProfile.yearsExp)) ? Number(secondaryProfile.yearsExp) : null,
-          status: secondaryProfile.status || "",
           teamLogoUrl: secondaryTeamLogo?.imageUrl || "",
-          superBowlOdds: secondarySbRef?.odds || "",
+          superBowlOdds:
+            secondarySbRef?.odds ||
+            toAmericanOdds(defaultSeasonPctForTeamMarket(secondaryTeamName, "super_bowl_winner")),
         };
       }
     }
@@ -5937,7 +6004,10 @@ async function enrichEntityMedia(
 
   let entityAssets = [];
   try {
-    entityAssets = await buildOrderedEntityAssets(prompt, 6);
+    entityAssets =
+      Array.isArray(baseValue?.entityAssets) && baseValue.entityAssets.length
+        ? baseValue.entityAssets
+        : await buildOrderedEntityAssets(prompt, 10);
   } catch (_error) {
     entityAssets = [];
   }

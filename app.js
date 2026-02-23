@@ -40,13 +40,9 @@ const feedbackDownBtn = document.getElementById("feedback-down");
 const feedbackThanks = document.getElementById("feedback-thanks");
 const PLACEHOLDER_ROTATE_MS = 3200;
 const EXAMPLE_REFRESH_MS = 12000;
-const CLIENT_API_VERSION = "2026.02.23.8";
-const FEEDBACK_COUNT_KEY = "ewa_feedback_estimate_count";
-const FEEDBACK_LAST_SHOWN_KEY = "ewa_feedback_last_shown_ts";
+const CLIENT_API_VERSION = "2026.02.23.9";
 const FEEDBACK_RATED_MAP_KEY = "ewa_feedback_rated_map";
 const FEEDBACK_SESSION_ID_KEY = "ewa_feedback_session_id";
-const FEEDBACK_MIN_INTERVAL_MS = 6 * 60 * 60 * 1000;
-const FEEDBACK_ASK_EVERY_N = 3;
 
 const DEFAULT_EXAMPLE_POOL = [
   "Josh Allen throws 30 touchdowns this season",
@@ -77,6 +73,42 @@ let feedbackContext = null;
 let primaryPlayerInfo = null;
 let secondaryPlayerInfo = null;
 let allowFeedbackForCurrentResult = false;
+let profileHideTimer = null;
+
+const NFL_TEAM_ABBR = {
+  "arizona cardinals": "ARI",
+  "atlanta falcons": "ATL",
+  "baltimore ravens": "BAL",
+  "buffalo bills": "BUF",
+  "carolina panthers": "CAR",
+  "chicago bears": "CHI",
+  "cincinnati bengals": "CIN",
+  "cleveland browns": "CLE",
+  "dallas cowboys": "DAL",
+  "denver broncos": "DEN",
+  "detroit lions": "DET",
+  "green bay packers": "GB",
+  "houston texans": "HOU",
+  "indianapolis colts": "IND",
+  "jacksonville jaguars": "JAX",
+  "kansas city chiefs": "KC",
+  "las vegas raiders": "LV",
+  "los angeles chargers": "LAC",
+  "los angeles rams": "LAR",
+  "miami dolphins": "MIA",
+  "minnesota vikings": "MIN",
+  "new england patriots": "NE",
+  "new orleans saints": "NO",
+  "new york giants": "NYG",
+  "new york jets": "NYJ",
+  "philadelphia eagles": "PHI",
+  "pittsburgh steelers": "PIT",
+  "san francisco 49ers": "SF",
+  "seattle seahawks": "SEA",
+  "tampa bay buccaneers": "TB",
+  "tennessee titans": "TEN",
+  "washington commanders": "WAS",
+};
 
 function isNflPrompt(prompt) {
   const text = String(prompt || "").toLowerCase();
@@ -215,18 +247,9 @@ function closeFeedbackPopAnimated() {
 
 function maybeShowFeedback(prompt, result) {
   if (!feedbackPop || !result) return;
-  const count = getStoredNumber(FEEDBACK_COUNT_KEY, 0) + 1;
-  setStoredValue(FEEDBACK_COUNT_KEY, count);
-
   const key = buildFeedbackKey(prompt, result);
   const rated = getFeedbackRatedMap();
   if (rated[key]) return;
-
-  const lastShown = getStoredNumber(FEEDBACK_LAST_SHOWN_KEY, 0);
-  const now = Date.now();
-  if (count < 2) return;
-  if (count % FEEDBACK_ASK_EVERY_N !== 0) return;
-  if (now - lastShown < FEEDBACK_MIN_INTERVAL_MS) return;
 
   feedbackContext = {
     prompt,
@@ -253,7 +276,6 @@ function maybeShowFeedback(prompt, result) {
   feedbackThanks.classList.add("hidden");
   feedbackPop.classList.remove("feedback-closing", "feedback-thanked");
   feedbackPop.classList.remove("hidden");
-  setStoredValue(FEEDBACK_LAST_SHOWN_KEY, now);
 }
 
 async function submitFeedback(vote) {
@@ -328,23 +350,24 @@ function applyResultCardState(mode) {
 
 function formatPlayerMeta(info) {
   if (!info || typeof info !== "object") return "";
-  const bits = [];
-  if (info.team) bits.push(info.team);
-  if (info.position) bits.push(info.position);
-  if (Number.isFinite(Number(info.age)) && Number(info.age) > 0) bits.push(`Age ${Number(info.age)}`);
-  if (Number.isFinite(Number(info.yearsExp)) && Number(info.yearsExp) >= 0) bits.push(`${Number(info.yearsExp)} yrs exp`);
-  if (info.status) bits.push(String(info.status).toUpperCase());
-  return bits.join(" • ");
+  return String(info.team || "").trim();
 }
 
 function hideHeadshotProfile() {
   if (!headshotProfilePop) return;
-  headshotProfilePop.classList.add("hidden");
+  if (profileHideTimer) window.clearTimeout(profileHideTimer);
+  headshotProfilePop.classList.remove("profile-enter");
+  headshotProfilePop.classList.add("profile-leave");
+  profileHideTimer = window.setTimeout(() => {
+    headshotProfilePop.classList.add("hidden");
+    headshotProfilePop.classList.remove("profile-leave");
+  }, 150);
 }
 
 function showHeadshotProfile(info, anchor = "primary", anchorEl = null) {
   if (!headshotProfilePop || !headshotProfileName || !headshotProfileMeta) return;
   if (!info || !info.name) return;
+  if (profileHideTimer) window.clearTimeout(profileHideTimer);
   const isTeam = String(info.position || "").toLowerCase() === "team" || String(info.kind || "").toLowerCase() === "team";
 
   if (headshotProfileLogo) {
@@ -353,21 +376,24 @@ function showHeadshotProfile(info, anchor = "primary", anchorEl = null) {
       headshotProfileLogo.src = logoUrl;
       headshotProfileLogo.alt = `${info.team || info.name || "Team"} logo`;
       headshotProfileLogo.classList.remove("hidden");
+      headshotProfilePop.classList.remove("no-logo");
     } else {
       headshotProfileLogo.removeAttribute("src");
       headshotProfileLogo.alt = "";
       headshotProfileLogo.classList.add("hidden");
+      headshotProfilePop.classList.add("no-logo");
     }
   }
 
   if (isTeam) {
-    headshotProfileName.textContent = String(info.name || "");
+    headshotProfileName.textContent = String(info.name || "").trim();
     headshotProfileMeta.textContent = info.superBowlOdds
       ? `2026-27 Super Bowl odds: ${info.superBowlOdds}`
       : "2026-27 Super Bowl odds: unavailable";
   } else {
     const pos = String(info.position || "").trim();
-    headshotProfileName.textContent = pos ? `${info.name} • ${pos}` : String(info.name || "");
+    const nm = String(info.name || "").trim();
+    headshotProfileName.textContent = pos ? `${nm} • ${pos}` : nm;
     headshotProfileMeta.textContent = formatPlayerMeta(info);
   }
   if (anchorEl instanceof Element && playerHeadshotWrap instanceof Element) {
@@ -383,7 +409,8 @@ function showHeadshotProfile(info, anchor = "primary", anchorEl = null) {
     headshotProfilePop.style.right = "auto";
     headshotProfilePop.style.left = "0";
   }
-  headshotProfilePop.classList.remove("hidden");
+  headshotProfilePop.classList.remove("profile-leave", "hidden");
+  headshotProfilePop.classList.add("profile-enter");
 }
 
 function renderEntityStrip(result) {
@@ -401,6 +428,7 @@ function renderEntityStrip(result) {
       const url = String(asset?.imageUrl || "").trim();
       if (!url) return false;
       if (/^(about:blank|data:,?)$/i.test(url)) return false;
+      if (/\/500\/\.png$/i.test(url)) return false;
       return true;
     })
     .slice(0, 10);
@@ -438,7 +466,7 @@ function renderEntityStrip(result) {
     });
     const info = asset.info && typeof asset.info === "object" ? asset.info : { name: asset.name || "Entity" };
     const infoLabel = info?.name
-      ? `${info.name}${info?.position ? ` • ${info.position}` : ""}`
+      ? `${String(info.name || "").trim()}${info?.position ? ` • ${String(info.position || "").trim()}` : ""}`
       : String(asset.name || asset.kind || "Entity");
     img.title = infoLabel;
     img.setAttribute("aria-label", infoLabel);
@@ -446,6 +474,10 @@ function renderEntityStrip(result) {
       const anchor = idx >= Math.floor(arr.length / 2) ? "secondary" : "primary";
       showHeadshotProfile(info, anchor, img);
     });
+    img.addEventListener("touchstart", () => {
+      const anchor = idx >= Math.floor(arr.length / 2) ? "secondary" : "primary";
+      showHeadshotProfile(info, anchor, img);
+    }, { passive: true });
     img.addEventListener("mouseenter", () => {
       const anchor = idx >= Math.floor(arr.length / 2) ? "secondary" : "primary";
       showHeadshotProfile(info, anchor, img);
@@ -504,7 +536,7 @@ function formatOddsForShare(oddsText) {
 
 function syncShareCard(result, prompt) {
   shareOddsOutput.textContent = formatOddsForShare(result.odds);
-  shareSummaryOutput.textContent = getDisplaySummaryLabel(result.summaryLabel, prompt);
+  shareSummaryOutput.textContent = getDisplaySummaryLabel(result.summaryLabel, prompt, result);
   shareProbabilityOutput.textContent = result.impliedProbability || "";
 
   if (result.sourceType === "sportsbook" && result.sourceBook) {
@@ -526,11 +558,50 @@ function isAwkwardSummaryEnding(text) {
   return /\b(and|or|to|of|in|on|for|with|before|after|the|a|an)$/i.test(normalizeSummaryText(text));
 }
 
-function getDisplaySummaryLabel(summaryLabel, prompt) {
+function getLastName(fullName) {
+  const clean = String(fullName || "")
+    .replace(/\b(Jr\.?|Sr\.?|II|III|IV|V)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!clean) return "";
+  const parts = clean.split(" ");
+  return parts[parts.length - 1] || clean;
+}
+
+function teamAbbrFromName(teamName) {
+  const key = String(teamName || "").toLowerCase().trim();
+  if (!key) return "";
+  return NFL_TEAM_ABBR[key] || "";
+}
+
+function applySummaryStyleRules(label, result) {
+  let out = String(label || "");
+  const assets = Array.isArray(result?.entityAssets) ? result.entityAssets : [];
+  for (const asset of assets) {
+    const nm = String(asset?.name || "").trim();
+    if (!nm) continue;
+    if (String(asset?.kind || "").toLowerCase() === "player") {
+      const ln = getLastName(nm);
+      if (ln) {
+        const re = new RegExp(`\\b${nm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+        out = out.replace(re, ln);
+      }
+    } else if (String(asset?.kind || "").toLowerCase() === "team") {
+      const abbr = teamAbbrFromName(nm);
+      if (abbr) {
+        const re = new RegExp(`\\b${nm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+        out = out.replace(re, abbr);
+      }
+    }
+  }
+  return normalizeSummaryText(out);
+}
+
+function getDisplaySummaryLabel(summaryLabel, prompt, result) {
   const label = normalizeSummaryText(summaryLabel);
-  if (!label) return normalizeSummaryText(prompt);
-  if (isAwkwardSummaryEnding(label)) return normalizeSummaryText(prompt);
-  return label;
+  const fallback = normalizeSummaryText(prompt);
+  const chosen = !label || isAwkwardSummaryEnding(label) ? fallback : label;
+  return applySummaryStyleRules(chosen, result);
 }
 
 function applyPromptSummarySizing(text) {
@@ -554,7 +625,7 @@ function showResult(result, prompt) {
   const oddsMode = renderOddsDisplay(result.odds);
   applyResultCardState(oddsMode);
   probabilityOutput.textContent = result.impliedProbability;
-  const displaySummary = getDisplaySummaryLabel(result.summaryLabel, prompt);
+  const displaySummary = getDisplaySummaryLabel(result.summaryLabel, prompt, result);
   promptSummary.textContent = displaySummary;
   applyPromptSummarySizing(displaySummary);
   resultTypeLabel.textContent = result.sourceType === "sportsbook" ? "Market Reference" : "Estimated Odds";
@@ -1036,6 +1107,11 @@ if (feedbackUpBtn) {
     event.stopPropagation();
     submitFeedback("up");
   });
+  feedbackUpBtn.addEventListener("touchend", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    submitFeedback("up");
+  }, { passive: false });
 }
 if (feedbackDownBtn) {
   feedbackDownBtn.addEventListener("click", (event) => {
@@ -1043,6 +1119,11 @@ if (feedbackDownBtn) {
     event.stopPropagation();
     submitFeedback("down");
   });
+  feedbackDownBtn.addEventListener("touchend", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    submitFeedback("down");
+  }, { passive: false });
 }
 scenarioInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {

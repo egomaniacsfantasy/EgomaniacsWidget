@@ -53,6 +53,9 @@
               <button id="copy-btn" class="ghost-btn" type="button">Copy</button>
             </div>
           </div>
+          <p id="hof-warning" class="hof-warning hidden">
+            We aren't all the way there yet with Hall of Fame prompts. But we're trying.
+          </p>
           <p id="odds-output" class="odds-output">+400</p>
 
           <div id="player-headshot-wrap" class="player-headshot-wrap">
@@ -111,6 +114,14 @@
         </article>
 
         <p id="status-line" class="status-line" aria-live="polite"></p>
+        <section id="feedback-pop" class="feedback-pop hidden" aria-live="polite">
+          <p id="feedback-question" class="feedback-question">Was this estimate helpful?</p>
+          <div class="feedback-actions">
+            <button id="feedback-up" class="feedback-btn" type="button" aria-label="Thumbs up">👍</button>
+            <button id="feedback-down" class="feedback-btn" type="button" aria-label="Thumbs down">👎</button>
+          </div>
+          <p id="feedback-thanks" class="feedback-thanks hidden">Thanks for your feedback.</p>
+        </section>
 
         <div class="examples">
           <p class="examples-best">For best results, ask questions involving skill-position players or teams.</p>

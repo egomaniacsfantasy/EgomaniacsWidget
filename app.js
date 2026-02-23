@@ -24,9 +24,21 @@ const shareOddsOutput = document.getElementById("share-odds-output");
 const shareSummaryOutput = document.getElementById("share-summary-output");
 const shareProbabilityOutput = document.getElementById("share-probability-output");
 const shareSourceOutput = document.getElementById("share-source-output");
+const hofWarning = document.getElementById("hof-warning");
+const feedbackPop = document.getElementById("feedback-pop");
+const feedbackQuestion = document.getElementById("feedback-question");
+const feedbackUpBtn = document.getElementById("feedback-up");
+const feedbackDownBtn = document.getElementById("feedback-down");
+const feedbackThanks = document.getElementById("feedback-thanks");
 const PLACEHOLDER_ROTATE_MS = 3200;
 const EXAMPLE_REFRESH_MS = 12000;
-const CLIENT_API_VERSION = "2026.02.23.1";
+const CLIENT_API_VERSION = "2026.02.23.5";
+const FEEDBACK_COUNT_KEY = "ewa_feedback_estimate_count";
+const FEEDBACK_LAST_SHOWN_KEY = "ewa_feedback_last_shown_ts";
+const FEEDBACK_RATED_MAP_KEY = "ewa_feedback_rated_map";
+const FEEDBACK_SESSION_ID_KEY = "ewa_feedback_session_id";
+const FEEDBACK_MIN_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const FEEDBACK_ASK_EVERY_N = 3;
 
 const DEFAULT_EXAMPLE_POOL = [
   "Josh Allen throws 30 touchdowns this season",
@@ -53,6 +65,7 @@ let placeholderPool = [...DEFAULT_EXAMPLE_POOL];
 let placeholderIdx = 0;
 let placeholderTimer = null;
 let exampleTimer = null;
+let feedbackContext = null;
 
 function isNflPrompt(prompt) {
   const text = String(prompt || "").toLowerCase();
@@ -98,6 +111,132 @@ function clearSourceLine() {
   sourceLine.classList.add("hidden");
 }
 
+function getStoredNumber(key, fallback = 0) {
+  try {
+    const n = Number(localStorage.getItem(key));
+    return Number.isFinite(n) ? n : fallback;
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function setStoredValue(key, value) {
+  try {
+    localStorage.setItem(key, String(value));
+  } catch (_error) {
+    // no-op
+  }
+}
+
+function getFeedbackRatedMap() {
+  try {
+    const raw = localStorage.getItem(FEEDBACK_RATED_MAP_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function setFeedbackRatedMap(map) {
+  try {
+    localStorage.setItem(FEEDBACK_RATED_MAP_KEY, JSON.stringify(map || {}));
+  } catch (_error) {
+    // no-op
+  }
+}
+
+function buildFeedbackKey(prompt, result) {
+  return `${String(prompt || "").toLowerCase().trim()}|${String(result?.summaryLabel || "").toLowerCase().trim()}|${String(result?.odds || "").trim()}`;
+}
+
+function getOrCreateSessionId() {
+  try {
+    const existing = localStorage.getItem(FEEDBACK_SESSION_ID_KEY);
+    if (existing) return existing;
+    const generated = `sess_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
+    localStorage.setItem(FEEDBACK_SESSION_ID_KEY, generated);
+    return generated;
+  } catch (_error) {
+    return `sess_${Date.now().toString(36)}`;
+  }
+}
+
+function hideFeedbackPop() {
+  if (!feedbackPop) return;
+  feedbackPop.classList.add("hidden");
+  feedbackThanks?.classList.add("hidden");
+  feedbackUpBtn?.removeAttribute("disabled");
+  feedbackDownBtn?.removeAttribute("disabled");
+}
+
+function maybeShowFeedback(prompt, result) {
+  if (!feedbackPop || !result || result.status !== "ok") return;
+  const count = getStoredNumber(FEEDBACK_COUNT_KEY, 0) + 1;
+  setStoredValue(FEEDBACK_COUNT_KEY, count);
+
+  const key = buildFeedbackKey(prompt, result);
+  const rated = getFeedbackRatedMap();
+  if (rated[key]) return;
+
+  const lastShown = getStoredNumber(FEEDBACK_LAST_SHOWN_KEY, 0);
+  const now = Date.now();
+  if (count < 2) return;
+  if (count % FEEDBACK_ASK_EVERY_N !== 0) return;
+  if (now - lastShown < FEEDBACK_MIN_INTERVAL_MS) return;
+
+  feedbackContext = {
+    prompt,
+    result: {
+      status: result.status,
+      odds: result.odds,
+      impliedProbability: result.impliedProbability,
+      summaryLabel: result.summaryLabel,
+      sourceType: result.sourceType,
+      sourceLabel: result.sourceLabel,
+      asOfDate: result.asOfDate,
+    },
+    key,
+  };
+  feedbackQuestion.textContent = "Was this estimate helpful?";
+  feedbackThanks.classList.add("hidden");
+  feedbackPop.classList.remove("hidden");
+  setStoredValue(FEEDBACK_LAST_SHOWN_KEY, now);
+}
+
+async function submitFeedback(vote) {
+  if (!feedbackContext || !["up", "down"].includes(vote)) return;
+  feedbackUpBtn?.setAttribute("disabled", "true");
+  feedbackDownBtn?.setAttribute("disabled", "true");
+  const body = {
+    vote,
+    prompt: feedbackContext.prompt,
+    result: feedbackContext.result,
+    clientVersion: CLIENT_API_VERSION,
+    sessionId: getOrCreateSessionId(),
+  };
+  try {
+    await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (_error) {
+    // We still thank the user to avoid friction.
+  }
+
+  const rated = getFeedbackRatedMap();
+  rated[feedbackContext.key] = vote;
+  setFeedbackRatedMap(rated);
+  feedbackThanks.classList.remove("hidden");
+  feedbackQuestion.textContent = "Thanks for your feedback.";
+  statusLine.textContent = "Thanks for your feedback.";
+  setTimeout(() => {
+    hideFeedbackPop();
+  }, 1400);
+}
+
 function parseAmericanOdds(oddsText) {
   const text = String(oddsText || "").trim();
   if (!text || text.toUpperCase() === "NO CHANCE") return null;
@@ -109,7 +248,7 @@ function renderOddsDisplay(oddsText) {
   const n = parseAmericanOdds(oddsText);
   if (n !== null && n <= -10000) {
     oddsOutput.classList.add("lock-mode");
-    oddsOutput.innerHTML = `IT'S A LOCK!<span class="odds-subline">(WELL, BASICALLY.)</span>`;
+    oddsOutput.innerHTML = `IT'S A LOCK!<span class="odds-subline">(WELL, BASICALLY, AS LONG AS HE'S HEALTHY.)</span>`;
     return;
   }
   if (n !== null && n >= 10000) {
@@ -119,6 +258,16 @@ function renderOddsDisplay(oddsText) {
   }
   oddsOutput.classList.remove("lock-mode");
   oddsOutput.textContent = oddsText;
+}
+
+function isHallOfFamePrompt(text) {
+  const t = String(text || "").toLowerCase();
+  return /\b(hall of fame|hof)\b/.test(t);
+}
+
+function toggleHallOfFameWarning(show) {
+  if (!hofWarning) return;
+  hofWarning.classList.toggle("hidden", !show);
 }
 
 function formatOddsForShare(oddsText) {
@@ -153,6 +302,7 @@ function showResult(result, prompt) {
   probabilityOutput.textContent = result.impliedProbability;
   promptSummary.textContent = result.summaryLabel || prompt;
   resultTypeLabel.textContent = result.sourceType === "sportsbook" ? "Market Reference" : "Estimated Odds";
+  toggleHallOfFameWarning(isHallOfFamePrompt(prompt) || isHallOfFamePrompt(result.summaryLabel));
   if (result.sourceType === "sportsbook" && result.sourceBook) {
     sourceLine.textContent = `Source: ${result.sourceBook}`;
     sourceLine.classList.remove("hidden");
@@ -190,6 +340,7 @@ function showResult(result, prompt) {
   }
 
   syncShareCard(result, prompt);
+  maybeShowFeedback(prompt, result);
 }
 
 function showRefusal(message, options = {}) {
@@ -199,6 +350,8 @@ function showRefusal(message, options = {}) {
   clearHeadshot();
   clearSourceLine();
   clearFreshness();
+  toggleHallOfFameWarning(false);
+  hideFeedbackPop();
   refusalTitle.textContent = options.title || "This tool can’t help with betting picks.";
   refusalCopy.textContent =
     message ||
@@ -213,6 +366,8 @@ function showSystemError(message) {
   clearHeadshot();
   clearSourceLine();
   clearFreshness();
+  toggleHallOfFameWarning(false);
+  hideFeedbackPop();
   statusLine.textContent = message;
 }
 
@@ -519,6 +674,12 @@ form.addEventListener("submit", onSubmit);
 copyBtn.addEventListener("click", copyCurrentResult);
 if (shareBtn) {
   shareBtn.addEventListener("click", shareCurrentResult);
+}
+if (feedbackUpBtn) {
+  feedbackUpBtn.addEventListener("click", () => submitFeedback("up"));
+}
+if (feedbackDownBtn) {
+  feedbackDownBtn.addEventListener("click", () => submitFeedback("down"));
 }
 scenarioInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {

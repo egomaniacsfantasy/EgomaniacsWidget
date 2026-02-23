@@ -234,6 +234,18 @@ button {
   color: var(--muted);
 }
 
+.hof-warning {
+  margin: 10px 0 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid #8c2e2e;
+  background: linear-gradient(180deg, rgba(123, 22, 22, 0.9), rgba(85, 15, 15, 0.9));
+  color: #ffd9d9;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
 .odds-output {
   margin: 8px 0 16px;
   font-size: clamp(2.5rem, 9vw, 3.3rem);
@@ -490,6 +502,54 @@ button {
   margin: 12px 2px 0;
   font-size: 0.86rem;
   color: var(--muted);
+}
+
+.feedback-pop {
+  margin-top: 10px;
+  border: 1px solid #5d5240;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #2a241a 0%, #1f1b14 100%);
+  color: #efe3cb;
+  padding: 10px 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.feedback-question {
+  margin: 0;
+  font-size: 0.86rem;
+  color: #e5d5b7;
+}
+
+.feedback-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.feedback-btn {
+  border: 1px solid #6a5b43;
+  border-radius: 999px;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.04);
+  color: #f4ead4;
+  cursor: pointer;
+}
+
+.feedback-btn:hover {
+  border-color: #bc8c55;
+}
+
+.feedback-thanks {
+  margin: 0;
+  grid-column: 1 / -1;
+  font-size: 0.8rem;
+  color: #c9f2d4;
 }
 
 .examples {

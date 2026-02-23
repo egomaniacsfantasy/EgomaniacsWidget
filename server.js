@@ -2455,6 +2455,61 @@ async function readOddsQueryEvents() {
   }
 }
 
+function mergeFeedbackWithQueries(queries, feedback) {
+  const voteByRequestId = new Map();
+  for (const f of Array.isArray(feedback) ? feedback : []) {
+    const rid = String(f?.requestId || "").trim();
+    if (!rid) continue;
+    voteByRequestId.set(rid, f?.vote === "up" ? "up" : f?.vote === "down" ? "down" : "none");
+  }
+
+  return (Array.isArray(queries) ? queries : []).map((row) => {
+    const rid = String(row?.requestId || "").trim();
+    const vote = rid && voteByRequestId.has(rid) ? voteByRequestId.get(rid) : "none";
+    return {
+      ts: String(row?.ts || ""),
+      requestId: rid,
+      sessionId: String(row?.sessionId || ""),
+      prompt: String(row?.prompt || ""),
+      result: row?.result && typeof row.result === "object" ? row.result : {},
+      vote,
+    };
+  });
+}
+
+function filterFeedbackAdminRows(rows, voteFilter, q) {
+  const vf = String(voteFilter || "").trim().toLowerCase();
+  const query = String(q || "").trim().toLowerCase();
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    if (vf && vf !== "all" && row.vote !== vf) return false;
+    if (query) {
+      const hay = `${row.prompt} ${JSON.stringify(row.result || {})}`.toLowerCase();
+      if (!hay.includes(query)) return false;
+    }
+    return true;
+  });
+}
+
+function buildFeedbackCounts(rows) {
+  let up = 0;
+  let down = 0;
+  let none = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (row.vote === "up") up += 1;
+    else if (row.vote === "down") down += 1;
+    else none += 1;
+  }
+  return { up, down, none };
+}
+
+function csvEscape(value) {
+  const s = String(value ?? "");
+  if (/[",\n\r]/.test(s)) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
 async function runBootSelfTest() {
   const scriptPath = path.resolve(process.cwd(), "scripts/regression-check.mjs");
   try {
@@ -7859,47 +7914,14 @@ app.get("/api/feedback/admin", async (req, res) => {
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(50000, Math.floor(limitRaw))) : 10000;
 
     const [queries, feedback] = await Promise.all([readOddsQueryEvents(), readFeedbackEvents()]);
-    const voteByRequestId = new Map();
-    for (const f of feedback) {
-      const rid = String(f?.requestId || "").trim();
-      if (!rid) continue;
-      voteByRequestId.set(rid, f?.vote === "up" ? "up" : f?.vote === "down" ? "down" : "none");
-    }
-
-    const merged = queries.map((row) => {
-      const rid = String(row?.requestId || "").trim();
-      const vote = rid && voteByRequestId.has(rid) ? voteByRequestId.get(rid) : "none";
-      return {
-        ts: String(row?.ts || ""),
-        requestId: rid,
-        sessionId: String(row?.sessionId || ""),
-        prompt: String(row?.prompt || ""),
-        result: row?.result && typeof row.result === "object" ? row.result : {},
-        vote,
-      };
-    });
-
-    const filtered = merged.filter((row) => {
-      if (voteFilter && voteFilter !== "all" && row.vote !== voteFilter) return false;
-      if (q) {
-        const hay = `${row.prompt} ${JSON.stringify(row.result || {})}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
+    const merged = mergeFeedbackWithQueries(queries, feedback);
+    const filtered = filterFeedbackAdminRows(merged, voteFilter, q);
 
     const ordered = filtered
       .sort((a, b) => new Date(b.ts || 0).getTime() - new Date(a.ts || 0).getTime())
       .slice(0, limit);
 
-    let up = 0;
-    let down = 0;
-    let none = 0;
-    for (const row of merged) {
-      if (row.vote === "up") up += 1;
-      else if (row.vote === "down") down += 1;
-      else none += 1;
-    }
+    const { up, down, none } = buildFeedbackCounts(merged);
 
     return res.json({
       status: "ok",
@@ -7917,6 +7939,56 @@ app.get("/api/feedback/admin", async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ error: error?.message || "Failed to build feedback admin data" });
+  }
+});
+
+app.get("/api/feedback/export.csv", async (req, res) => {
+  try {
+    const voteFilter = String(req.query?.vote || "all").trim().toLowerCase();
+    const q = String(req.query?.q || "").trim().toLowerCase();
+    const limitRaw = Number(req.query?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200000, Math.floor(limitRaw))) : 100000;
+    const [queries, feedback] = await Promise.all([readOddsQueryEvents(), readFeedbackEvents()]);
+    const merged = mergeFeedbackWithQueries(queries, feedback);
+    const filtered = filterFeedbackAdminRows(merged, voteFilter, q)
+      .sort((a, b) => new Date(b.ts || 0).getTime() - new Date(a.ts || 0).getTime())
+      .slice(0, limit);
+
+    const header = [
+      "timestamp",
+      "vote",
+      "prompt",
+      "result_status",
+      "result_odds",
+      "result_implied_probability",
+      "result_summary",
+      "result_source_type",
+      "result_source_label",
+      "result_message",
+      "request_id",
+      "session_id",
+    ];
+    const rows = filtered.map((row) => ([
+      row.ts || "",
+      row.vote || "none",
+      row.prompt || "",
+      row.result?.status || "",
+      row.result?.odds || "",
+      row.result?.impliedProbability || "",
+      row.result?.summaryLabel || "",
+      row.result?.sourceType || "",
+      row.result?.sourceLabel || "",
+      row.result?.message || "",
+      row.requestId || "",
+      row.sessionId || "",
+    ].map(csvEscape).join(",")));
+    const csv = [header.map(csvEscape).join(","), ...rows].join("\n");
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="egomaniacs_feedback_export_${new Date().toISOString().slice(0, 10)}.csv"`);
+    return res.send(csv);
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || "Failed to export feedback CSV" });
   }
 });
 
@@ -8060,6 +8132,7 @@ app.get("/feedback", (_req, res) => {
       </select>
       <input id="searchInput" class="search" type="text" placeholder="Search prompt/output..." />
       <button id="refreshBtn">Refresh</button>
+      <button id="exportBtn">Export CSV</button>
       <span class="small" id="status">Loading...</span>
     </div>
     <div class="table-wrap">
@@ -8088,6 +8161,7 @@ app.get("/feedback", (_req, res) => {
     const voteFilterEl = document.getElementById("voteFilter");
     const searchInput = document.getElementById("searchInput");
     const refreshBtn = document.getElementById("refreshBtn");
+    const exportBtn = document.getElementById("exportBtn");
     const statusEl = document.getElementById("status");
 
     function fmtTime(iso) {
@@ -8144,6 +8218,15 @@ app.get("/feedback", (_req, res) => {
 
     refreshBtn.addEventListener("click", refresh);
     voteFilterEl.addEventListener("change", refresh);
+    exportBtn?.addEventListener("click", () => {
+      const vote = voteFilterEl.value || "all";
+      const q = String(searchInput?.value || "").trim();
+      const qs = new URLSearchParams();
+      qs.set("limit", "100000");
+      qs.set("vote", vote);
+      if (q) qs.set("q", q);
+      window.open("/api/feedback/export.csv?" + qs.toString(), "_blank");
+    });
     searchInput?.addEventListener("keydown", (e) => {
       if (e.key === "Enter") refresh();
     });

@@ -24,8 +24,8 @@ const ODDS_API_KEY = process.env.ODDS_API_KEY || "";
 const ODDS_API_BASE = process.env.ODDS_API_BASE || "https://api.the-odds-api.com";
 const ODDS_API_REGIONS = process.env.ODDS_API_REGIONS || "us";
 const ODDS_API_BOOKMAKERS = process.env.ODDS_API_BOOKMAKERS || "draftkings,fanduel";
-const CACHE_VERSION = "v40";
-const API_PUBLIC_VERSION = "2026.02.21.6";
+const CACHE_VERSION = "v42";
+const API_PUBLIC_VERSION = "2026.02.23.1";
 const DEFAULT_NFL_SEASON = process.env.DEFAULT_NFL_SEASON || "2025-26";
 const oddsCache = new Map();
 const PLAYER_STATUS_TIMEOUT_MS = Number(process.env.PLAYER_STATUS_TIMEOUT_MS || 7000);
@@ -37,6 +37,7 @@ const MONOTONIC_TIMEOUT_MS = Number(process.env.MONOTONIC_TIMEOUT_MS || 5000);
 const SPORTSBOOK_REF_CACHE_TTL_MS = Number(process.env.SPORTSBOOK_REF_CACHE_TTL_MS || 10 * 60 * 1000);
 const SEMANTIC_CACHE_TTL_MS = Number(process.env.SEMANTIC_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
 const STABLE_CACHE_TTL_MS = Number(process.env.STABLE_CACHE_TTL_MS || 30 * 24 * 60 * 60 * 1000);
+const MAJOR_EVENT_DIGEST_TTL_MS = Number(process.env.MAJOR_EVENT_DIGEST_TTL_MS || 6 * 60 * 60 * 1000);
 const SLEEPER_NFL_PLAYERS_URL = "https://api.sleeper.app/v1/players/nfl";
 const PHASE2_CALIBRATION_FILE = process.env.PHASE2_CALIBRATION_FILE || "data/phase2_calibration.json";
 const FEATURE_ENABLE_TRACE = String(process.env.FEATURE_ENABLE_TRACE || "true") === "true";
@@ -45,6 +46,9 @@ const execFileAsync = promisify(execFile);
 let nflPlayerIndex = new Map();
 let nflIndexLoadedAt = 0;
 let nflIndexLoadPromise = null;
+let nflIndexDigest = "na";
+let nflTeamDigestMap = new Map();
+let nflIndexDigestBuiltAt = 0;
 let liveSportsState = null;
 let liveSportsStateLoadedAt = 0;
 let liveSportsStatePromise = null;
@@ -720,7 +724,8 @@ function hasNflContext(prompt) {
 function applyDefaultNflSeasonInterpretation(prompt) {
   let text = String(prompt || "").trim();
   if (!text) return text;
-  if (!hasNflContext(text)) return text;
+  const statLike = hasDeterministicStatPattern(text);
+  if (!hasNflContext(text) && !statLike) return text;
   if (/\b(hall of fame|hof)\b/i.test(text)) return text;
   if (/\b(ever|career|all[- ]time)\b/i.test(text)) return text;
   if (hasExplicitSeasonYear(text)) return text;
@@ -1018,6 +1023,24 @@ function parseBeforeOtherTeamIntent(prompt) {
   return { market, teamA, teamB, years };
 }
 
+function defaultSeasonPctForTeamMarket(teamToken, market) {
+  const defaults = {
+    super_bowl_winner: 4.5,
+    afc_winner: 9.5,
+    nfc_winner: 9.5,
+    nba_finals_winner: 6.5,
+    world_series_winner: 6.0,
+    stanley_cup_winner: 6.0,
+  };
+  const base = Number(defaults[market] || 5.0);
+  const abbr = extractNflTeamAbbr(teamToken || "");
+  if (!abbr) return base;
+  const playoffPct = nflTeamPlayoffMakePct(abbr);
+  if (market === "super_bowl_winner") return clamp(playoffPct * 0.09, 1.2, 16);
+  if (market === "afc_winner" || market === "nfc_winner") return clamp(playoffPct * 0.18, 2.5, 28);
+  return base;
+}
+
 function raceBeforeProbability(perSeasonA, perSeasonB) {
   const n = Math.min(perSeasonA.length, perSeasonB.length);
   let survive = 1;
@@ -1058,8 +1081,8 @@ async function buildBeforeOtherTeamEstimate(prompt, asOfDate) {
   };
   let seasonPctA = refA ? Number(String(refA.impliedProbability || "").replace("%", "")) : null;
   let seasonPctB = refB ? Number(String(refB.impliedProbability || "").replace("%", "")) : null;
-  if (!Number.isFinite(seasonPctA) || seasonPctA <= 0) seasonPctA = defaults[market] || 5.0;
-  if (!Number.isFinite(seasonPctB) || seasonPctB <= 0) seasonPctB = defaults[market] || 5.0;
+  if (!Number.isFinite(seasonPctA) || seasonPctA <= 0) seasonPctA = defaultSeasonPctForTeamMarket(teamA, market);
+  if (!Number.isFinite(seasonPctB) || seasonPctB <= 0) seasonPctB = defaultSeasonPctForTeamMarket(teamB, market);
   seasonPctA = clamp(seasonPctA, 0.2, 70);
   seasonPctB = clamp(seasonPctB, 0.2, 70);
 
@@ -1408,6 +1431,7 @@ function parseLocalIndexNote(note) {
     position: parts[2] || "",
     yearsExp: Number(parts[3] || "") || null,
     age: Number(parts[4] || "") || null,
+    availability: parts[5] || "",
   };
 }
 
@@ -1541,9 +1565,9 @@ function buildCareerSeasonCurve(baseSeasonWinPct, yearsRemaining, yearsExp, posG
   for (let i = 0; i < yearsRemaining; i += 1) {
     const careerYear = exp + i + 1;
     let roleFactor = 1;
-    if (careerYear <= 2) roleFactor *= 0.78;
-    else if (careerYear <= 4) roleFactor *= 0.92;
-    else if (careerYear <= 9) roleFactor *= 1.05;
+    if (careerYear <= 2) roleFactor *= posGroup === "qb" ? 0.92 : 0.8;
+    else if (careerYear <= 4) roleFactor *= posGroup === "qb" ? 1.03 : 0.92;
+    else if (careerYear <= 9) roleFactor *= posGroup === "qb" ? 1.08 : 1.02;
     else if (careerYear <= 12) roleFactor *= 0.92;
     else roleFactor *= 0.8;
 
@@ -1569,7 +1593,7 @@ async function estimateCareerSuperBowlOdds(prompt, playerName, localPlayerStatus
 
   let playerShare = posGroup === "qb" ? 0.95 : 0.28;
   playerShare *= getTopQbBoost(playerName);
-  if (posGroup === "qb" && Number(localHints.yearsExp || 0) <= 2) playerShare *= 0.72;
+  if (posGroup === "qb" && Number(localHints.yearsExp || 0) <= 2) playerShare *= 0.92;
   if (posGroup === "qb" && Number(localHints.yearsExp || 0) >= 4) playerShare *= 1.12;
   const baseSeasonWinPct = clamp(teamSeasonPct * playerShare, 0.2, 35);
 
@@ -2062,22 +2086,218 @@ function isLowVolatilityPrompt(prompt) {
   );
 }
 
+function getTeamRosterDigest(teamToken) {
+  const abbr = extractNflTeamAbbr(teamToken || "");
+  if (!abbr) return "";
+  return nflTeamDigestMap.get(abbr) || "";
+}
+
+async function buildTeamMarketPulse(teamToken) {
+  if (!ODDS_API_KEY) return {};
+  const team = normalizeTeamToken(teamToken || "");
+  if (!team) return {};
+  const markets = ["super_bowl_winner", "afc_winner", "nfc_winner"];
+  const out = {};
+  for (const market of markets) {
+    const ref = await getSportsbookReferenceByTeamAndMarket(team, market);
+    const pct = parseImpliedProbabilityPct(ref?.impliedProbability);
+    if (Number.isFinite(pct)) out[market] = Number(pct.toFixed(1));
+  }
+  return out;
+}
+
 function stableSignature() {
   return [
     CACHE_VERSION,
     API_PUBLIC_VERSION,
     phase2Calibration?.version || "na",
-    String(nflIndexLoadedAt || 0),
   ].join("|");
 }
 
-function storeStableIfLowVolatility(normalizedPrompt, prompt, value) {
+function parseImpliedProbabilityPct(text) {
+  const n = Number(String(text || "").replace("%", "").trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+function relativeDelta(a, b) {
+  const x = Number(a);
+  const y = Number(b);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || y === 0) return null;
+  return Math.abs(x - y) / Math.abs(y);
+}
+
+function hasSignificantSnapshotDrift(previous, current) {
+  if (!previous || !current) return true;
+  if (String(previous.market || "") !== String(current.market || "")) return true;
+
+  const prevTeams = previous.teamSignals || {};
+  const currTeams = current.teamSignals || {};
+  const teamNames = [...new Set([...Object.keys(prevTeams), ...Object.keys(currTeams)])];
+  for (const team of teamNames) {
+    const p = prevTeams[team];
+    const c = currTeams[team];
+    if (!p || !c) return true;
+    const abs = Math.abs(c - p);
+    const rel = relativeDelta(c, p);
+    if (abs >= 3) return true;
+    if (rel !== null && rel >= 0.2) return true;
+  }
+
+  const prevPlayers = previous.playerSignals || {};
+  const currPlayers = current.playerSignals || {};
+  const playerNames = [...new Set([...Object.keys(prevPlayers), ...Object.keys(currPlayers)])];
+  for (const name of playerNames) {
+    const p = prevPlayers[name];
+    const c = currPlayers[name];
+    if (!p || !c) return true;
+    if (String(p.teamAbbr || "") !== String(c.teamAbbr || "")) return true;
+    if (String(p.status || "") !== String(c.status || "")) return true;
+    if (String(p.availability || "") !== String(c.availability || "")) return true;
+  }
+
+  if (String(previous.nflIndexDigest || "") !== String(current.nflIndexDigest || "")) {
+    const prevTeamDigests = previous.teamRosters || {};
+    const currTeamDigests = current.teamRosters || {};
+    const teams = [...new Set([...Object.keys(prevTeamDigests), ...Object.keys(currTeamDigests)])];
+    for (const team of teams) {
+      if (String(prevTeamDigests[team] || "") !== String(currTeamDigests[team] || "")) return true;
+    }
+  }
+
+  const prevPulse = previous.marketPulse || {};
+  const currPulse = current.marketPulse || {};
+  const pulseTeams = [...new Set([...Object.keys(prevPulse), ...Object.keys(currPulse)])];
+  for (const team of pulseTeams) {
+    const p = prevPulse[team] || {};
+    const c = currPulse[team] || {};
+    const keys = [...new Set([...Object.keys(p), ...Object.keys(c)])];
+    for (const key of keys) {
+      const pv = Number(p[key]);
+      const cv = Number(c[key]);
+      if (!Number.isFinite(pv) || !Number.isFinite(cv)) continue;
+      const abs = Math.abs(cv - pv);
+      const rel = relativeDelta(cv, pv);
+      if (abs >= 2.5) return true;
+      if (rel !== null && rel >= 0.25) return true;
+    }
+  }
+
+  return false;
+}
+
+async function buildLowVolatilitySnapshot(prompt) {
+  const marketIntent = parseBeforeOtherTeamIntent(prompt)
+    || (parseMultiYearWindow(prompt) ? parseSportsbookFuturesIntent(prompt) : null);
+
+  const snapshot = {
+    market: marketIntent?.market || "",
+    teamSignals: {},
+    playerSignals: {},
+    nflIndexDigest,
+    teamRosters: {},
+    marketPulse: {},
+  };
+
+  const teamTokens = new Set();
+  if (marketIntent?.teamA) teamTokens.add(marketIntent.teamA);
+  if (marketIntent?.teamB) teamTokens.add(marketIntent.teamB);
+  if (marketIntent?.team) teamTokens.add(marketIntent.team);
+  for (const t of extractKnownTeamTokens(prompt, 4)) {
+    if (t) teamTokens.add(t);
+  }
+
+  try {
+    if (!nflPlayerIndex.size || (Date.now() - nflIndexDigestBuiltAt) > MAJOR_EVENT_DIGEST_TTL_MS) {
+      await loadNflPlayerIndex(false);
+    }
+  } catch (_error) {
+    // Best-effort only.
+  }
+
+  snapshot.nflIndexDigest = nflIndexDigest || "na";
+
+  if (snapshot.market && ODDS_API_KEY) {
+    for (const team of teamTokens) {
+      const ref = await getSportsbookReferenceByTeamAndMarket(team, snapshot.market);
+      const pct = parseImpliedProbabilityPct(ref?.impliedProbability);
+      if (Number.isFinite(pct)) {
+        snapshot.teamSignals[normalizeTeamToken(team)] = Number(pct.toFixed(1));
+      }
+    }
+  }
+
+  for (const team of teamTokens) {
+    const key = normalizeTeamToken(team);
+    if (!key) continue;
+    const digest = getTeamRosterDigest(team);
+    if (digest) snapshot.teamRosters[key] = digest;
+    if (ODDS_API_KEY) {
+      const pulse = await buildTeamMarketPulse(team);
+      if (Object.keys(pulse).length) snapshot.marketPulse[key] = pulse;
+    }
+  }
+
+  const playerCandidates = extractPlayerNamesFromPrompt(prompt, 4);
+  const primary = extractPlayerName(prompt);
+  if (primary) playerCandidates.unshift(primary);
+  const dedup = [...new Set(playerCandidates.map((x) => String(x || "").trim()).filter(Boolean))].slice(0, 3);
+  for (const player of dedup) {
+    const profile = await resolveNflPlayerProfile(player);
+    if (!profile) continue;
+    const key = normalizePersonName(profile.name || player);
+    snapshot.playerSignals[key] = {
+      teamAbbr: profile.teamAbbr || "",
+      status: profile.status || "unknown",
+      availability: profile.availability || "unknown",
+    };
+
+    if (profile.teamAbbr) {
+      const teamName = NFL_TEAM_DISPLAY[profile.teamAbbr] || profile.teamAbbr;
+      const teamKey = normalizeTeamToken(teamName);
+      if (teamKey && !snapshot.teamRosters[teamKey]) {
+        const digest = getTeamRosterDigest(teamName);
+        if (digest) snapshot.teamRosters[teamKey] = digest;
+      }
+      if (teamKey && ODDS_API_KEY && !snapshot.marketPulse[teamKey]) {
+        const pulse = await buildTeamMarketPulse(teamName);
+        if (Object.keys(pulse).length) snapshot.marketPulse[teamKey] = pulse;
+      }
+    }
+  }
+
+  return snapshot;
+}
+
+async function getStableLowVolatilityValue(normalizedPrompt, prompt) {
+  const entry = stableOddsCache.get(normalizedPrompt);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > STABLE_CACHE_TTL_MS) {
+    stableOddsCache.delete(normalizedPrompt);
+    return null;
+  }
+  if (entry.signature !== stableSignature()) {
+    stableOddsCache.delete(normalizedPrompt);
+    return null;
+  }
+
+  const currentSnapshot = await buildLowVolatilitySnapshot(prompt);
+  if (hasSignificantSnapshotDrift(entry.snapshot, currentSnapshot)) {
+    stableOddsCache.delete(normalizedPrompt);
+    return null;
+  }
+
+  return entry.value || null;
+}
+
+async function storeStableIfLowVolatility(normalizedPrompt, prompt, value) {
   if (!isLowVolatilityPrompt(prompt)) return;
   if (!value || value.status !== "ok") return;
   if (value.sourceType === "sportsbook") return;
+  const snapshot = await buildLowVolatilitySnapshot(prompt);
   stableOddsCache.set(normalizedPrompt, {
     ts: Date.now(),
     signature: stableSignature(),
+    snapshot,
     value,
   });
 }
@@ -2105,6 +2325,42 @@ function mapSleeperStatus(rawStatus) {
   if (s.includes("retired")) return "retired";
   if (["active", "ir", "pup", "reserve", "practice squad"].some((x) => s.includes(x))) return "active";
   return "unknown";
+}
+
+function mapSleeperAvailability(rawStatus) {
+  const s = String(rawStatus || "").toLowerCase();
+  if (!s) return "unknown";
+  if (/\b(deceased|retired)\b/.test(s)) return "out";
+  if (/\b(ir|pup|reserve|suspend|suspended|nfi|injured reserve|out)\b/.test(s)) return "limited";
+  if (/\b(active|practice squad)\b/.test(s)) return "active";
+  return "unknown";
+}
+
+function rebuildNflIndexDigests(indexMap) {
+  const globalRows = [];
+  const byTeam = new Map();
+  for (const [nameKey, entries] of indexMap.entries()) {
+    for (const e of entries || []) {
+      const team = String(e?.team || "FA").toUpperCase();
+      const pos = String(e?.position || "NA").toUpperCase();
+      const status = String(e?.status || "unknown");
+      const availability = String(e?.availability || "unknown");
+      const yearsExp = Number.isFinite(Number(e?.yearsExp)) ? Number(e.yearsExp) : "NA";
+      const row = `${nameKey}|${team}|${pos}|${status}|${availability}|${yearsExp}`;
+      globalRows.push(row);
+      if (!byTeam.has(team)) byTeam.set(team, []);
+      byTeam.get(team).push(row);
+    }
+  }
+  globalRows.sort();
+  nflIndexDigest = String(hashString(globalRows.join("||")));
+  const teamDigests = new Map();
+  for (const [team, rows] of byTeam.entries()) {
+    rows.sort();
+    teamDigests.set(team, String(hashString(rows.join("||"))));
+  }
+  nflTeamDigestMap = teamDigests;
+  nflIndexDigestBuiltAt = Date.now();
 }
 
 function ageFromBirthDate(birthDate) {
@@ -2142,6 +2398,7 @@ async function loadNflPlayerIndex(force = false) {
         const entry = {
           fullName,
           status: mapSleeperStatus(p.status),
+          availability: mapSleeperAvailability(p.status),
           team: p.team || "",
           position: p.position || "",
           yearsExp: Number.isFinite(Number(p.years_exp)) ? Number(p.years_exp) : null,
@@ -2155,6 +2412,7 @@ async function loadNflPlayerIndex(force = false) {
         }
       }
       nflPlayerIndex = map;
+      rebuildNflIndexDigests(nflPlayerIndex);
       nflIndexLoadedAt = Date.now();
       return nflPlayerIndex;
     } finally {
@@ -2217,7 +2475,7 @@ async function getLocalNflPlayerStatus(player, preferredTeamAbbr = "") {
     status: found.status || "unknown",
     isSportsFigure: "yes",
     teamAbbr: found.team || "",
-    note: `local_nfl_index:${found.team || "FA"}:${found.position || "NA"}:${found.yearsExp ?? "NA"}:${found.age ?? "NA"}`,
+    note: `local_nfl_index:${found.team || "FA"}:${found.position || "NA"}:${found.yearsExp ?? "NA"}:${found.age ?? "NA"}:${found.availability || "unknown"}`,
   };
 }
 
@@ -2249,7 +2507,7 @@ async function alignPlayerStatusToPromptPosition(playerName, status, prompt, pre
   return {
     ...status,
     teamAbbr: chosen.team || status.teamAbbr || "",
-    note: `local_nfl_index:${chosen.team || "FA"}:${chosen.position || "NA"}:${chosen.yearsExp ?? "NA"}:${chosen.age ?? "NA"}`,
+    note: `local_nfl_index:${chosen.team || "FA"}:${chosen.position || "NA"}:${chosen.yearsExp ?? "NA"}:${chosen.age ?? "NA"}:${chosen.availability || "unknown"}`,
   };
 }
 
@@ -2321,7 +2579,7 @@ async function getFuzzyLocalNflPlayerStatus(player, preferredTeamAbbr = "") {
       status: found.status || "unknown",
       isSportsFigure: "yes",
       teamAbbr: found.team || "",
-      note: `local_nfl_index_fuzzy:${found.team || "FA"}:${found.position || "NA"}:${found.yearsExp ?? "NA"}:${found.age ?? "NA"}`,
+      note: `local_nfl_index_fuzzy:${found.team || "FA"}:${found.position || "NA"}:${found.yearsExp ?? "NA"}:${found.age ?? "NA"}:${found.availability || "unknown"}`,
     },
   };
 }
@@ -2345,6 +2603,7 @@ async function resolveNflPlayerProfile(playerName, preferredTeamAbbr = "") {
     position: hints.position || "",
     yearsExp: hints.yearsExp,
     age: hints.age,
+    availability: hints.availability || "",
     status: local.status || "unknown",
   };
 }
@@ -4283,9 +4542,11 @@ app.post("/api/odds", async (req, res) => {
     const intent = parseIntent(promptForParsing);
     const semanticKey = canonicalizePromptForKey(promptForParsing);
     const normalizedPrompt = `${CACHE_VERSION}:${semanticKey}`;
-    const stableCached = stableOddsCache.get(normalizedPrompt);
-    if (stableCached && Date.now() - stableCached.ts < STABLE_CACHE_TTL_MS && stableCached.signature === stableSignature()) {
-      return res.json(stableCached.value);
+    if (isLowVolatilityPrompt(promptForParsing)) {
+      const stableCached = await getStableLowVolatilityValue(normalizedPrompt, promptForParsing);
+      if (stableCached) {
+        return res.json(stableCached);
+      }
     }
     let playerHint = extractPlayerName(promptForParsing);
     const teamHint = extractTeamName(promptForParsing);
@@ -4480,7 +4741,7 @@ app.post("/api/odds", async (req, res) => {
       }
       oddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
       semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
-      storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
+      await storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
       return res.json(stable);
     }
 
@@ -4495,7 +4756,7 @@ app.post("/api/odds", async (req, res) => {
       }
       oddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
       semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
-      storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
+      await storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
       return res.json(stable);
     }
 
@@ -4513,7 +4774,7 @@ app.post("/api/odds", async (req, res) => {
       }
       oddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
       semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
-      storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
+      await storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
       return res.json(stable);
     }
 
@@ -4531,7 +4792,7 @@ app.post("/api/odds", async (req, res) => {
       }
       oddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
       semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
-      storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
+      await storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
       return res.json(stable);
     }
 
@@ -4780,7 +5041,7 @@ app.post("/api/odds", async (req, res) => {
           metrics.baselineServed += 1;
           oddsCache.set(normalizedPrompt, { ts: Date.now(), value });
           semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value });
-          storeStableIfLowVolatility(normalizedPrompt, promptForParsing, value);
+          await storeStableIfLowVolatility(normalizedPrompt, promptForParsing, value);
           return res.json(value);
         }
       }
@@ -4803,7 +5064,7 @@ app.post("/api/odds", async (req, res) => {
           const finalValue = decorateForScenarioComplexity(value, conditionalIntent, jointEventIntent);
           oddsCache.set(normalizedPrompt, { ts: Date.now(), value: finalValue });
           semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: finalValue });
-          storeStableIfLowVolatility(normalizedPrompt, promptForParsing, finalValue);
+          await storeStableIfLowVolatility(normalizedPrompt, promptForParsing, finalValue);
           return res.json(finalValue);
         }
       }
@@ -5076,7 +5337,7 @@ app.post("/api/odds", async (req, res) => {
       metrics.hypotheticalServed += 1;
       oddsCache.set(normalizedPrompt, { ts: Date.now(), value: finalValue });
       semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: finalValue });
-      storeStableIfLowVolatility(normalizedPrompt, promptForParsing, finalValue);
+      await storeStableIfLowVolatility(normalizedPrompt, promptForParsing, finalValue);
       return res.json(finalValue);
     } catch (error) {
       if (error?.name === "AbortError") {
@@ -5373,6 +5634,8 @@ app.get("/api/health", (_req, res) => {
     pid: process.pid,
     nflIndexPlayers: nflPlayerIndex.size,
     nflIndexLoadedAt: nflIndexLoadedAt ? new Date(nflIndexLoadedAt).toISOString() : null,
+    nflIndexDigest: nflIndexDigest || null,
+    nflIndexDigestBuiltAt: nflIndexDigestBuiltAt ? new Date(nflIndexDigestBuiltAt).toISOString() : null,
     phase2CalibrationLoaded: Boolean(phase2Calibration),
     phase2CalibrationVersion: phase2Calibration?.version || null,
     oddsApiConfigured: Boolean(ODDS_API_KEY),

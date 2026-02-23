@@ -218,6 +218,11 @@ function parseSeasonStatIntent(prompt) {
     const threshold = Number(rushingTds[1]);
     if (Number.isFinite(threshold) && threshold >= 1) return { metric: "rushing_tds", threshold };
   }
+  const rushingTdsGets = normalized.match(/\b(?:gets?|has|records?)\s+(\d{1,2})\s+rushing\s+(tds?|touchdowns?)\b/);
+  if (rushingTdsGets) {
+    const threshold = Number(rushingTdsGets[1]);
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "rushing_tds", threshold };
+  }
 
   const receivingYards = normalized.match(/\b(?:for|gets?|has|records?)\s+(\d{2,4})\s+(receiving\s+)?(yards?|yds?)\b/);
   if (receivingYards && /\b(receiv\w*|catch\w*)\b/.test(normalized)) {
@@ -229,6 +234,17 @@ function parseSeasonStatIntent(prompt) {
   if (rushingYards) {
     const threshold = Number(rushingYards[1]);
     if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold };
+  }
+  const rushingYardsGets = normalized.match(/\b(?:gets?|has|records?)\s+(\d{2,4})\s+rushing\s+(yards?|yds?)\b/);
+  if (rushingYardsGets) {
+    const threshold = Number(rushingYardsGets[1]);
+    if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold };
+  }
+
+  const scrimmageYards = normalized.match(/\b(?:gets?|has|records?)\s+(\d{2,4})\s+(scrimmage|from scrimmage)\s+(yards?|yds?)\b/);
+  if (scrimmageYards) {
+    const threshold = Number(scrimmageYards[1]);
+    if (Number.isFinite(threshold) && threshold >= 50) return { metric: "scrimmage_yards", threshold };
   }
 
   const receptions = normalized.match(/\b(?:catches?|gets?|has|records?)\s+(\d{2,3})\s+(receptions?|catches?)\b/);
@@ -287,6 +303,20 @@ function loadSkillSeasonData() {
     skillSeasonData = null;
   }
   return skillSeasonData;
+}
+
+function getSkillPlayerSeasons(profile) {
+  const dataset = loadSkillSeasonData();
+  if (!dataset?.players) return [];
+  const key = normalizeName(profile?.name || "");
+  const row = dataset.players[key];
+  if (!row?.seasons?.length) return [];
+  return row.seasons
+    .map((s) => ({
+      ...s,
+      scrimmage_yards: Number(s?.rushing_yards || 0) + Number(s?.receiving_yards || 0),
+    }))
+    .filter((s) => Number(s.games || 0) >= 6);
 }
 
 function positionGroup(position) {
@@ -430,6 +460,7 @@ function skillFallbackMean(metric, posGroup) {
     receiving_yards: { rb: 370, wr: 840, te: 620, qb: 5, other: 120 },
     receiving_tds: { rb: 2.4, wr: 5.5, te: 4.8, qb: 0.03, other: 0.8 },
     receptions: { rb: 38, wr: 62, te: 54, qb: 0.1, other: 12 },
+    scrimmage_yards: { rb: 1120, wr: 920, te: 640, qb: 250, other: 180 },
   };
   const byPos = table[metric] || {};
   return Number(byPos[posGroup] ?? byPos.other ?? 25);
@@ -448,7 +479,11 @@ function buildSkillSeasonLambda(profile, metric, asOfDate) {
     return { lambda: fallback, modelType: "skill_fallback", sampleSeasons: 0, staleYears: 0, posGroup };
   }
 
-  const valid = row.seasons.filter((s) => Number.isFinite(Number(s?.[metric])) && Number(s.games || 0) >= 6);
+  const withScrimmage = row.seasons.map((s) => ({
+    ...s,
+    scrimmage_yards: Number(s?.rushing_yards || 0) + Number(s?.receiving_yards || 0),
+  }));
+  const valid = withScrimmage.filter((s) => Number.isFinite(Number(s?.[metric])) && Number(s.games || 0) >= 6);
   if (!valid.length) {
     return { lambda: fallback, modelType: "skill_fallback", sampleSeasons: 0, staleYears: 0, posGroup };
   }
@@ -461,10 +496,26 @@ function buildSkillSeasonLambda(profile, metric, asOfDate) {
   const asOfYear = Number(String(asOfDate || new Date().toISOString().slice(0, 10)).slice(0, 4));
   const latestSeason = Number(dataset.latestSeason || valid[0]?.season || asOfYear - 1);
   const staleYears = Math.max(0, asOfYear - latestSeason - 1);
-  const reliability = clamp(reliabilityBase * (staleYears >= 1 ? 0.55 : 1), 0.2, 0.78);
+  const reliability = clamp(reliabilityBase * (staleYears >= 1 ? 0.92 : 1), 0.2, 0.84);
 
   let lambda = clamp((((recent ?? longRunMean) * 0.7 + longRunMean * 0.3) * durabilityFactor), 0.02, 3000);
   lambda = clamp(lambda * reliability + fallback * (1 - reliability), 0.02, 3000);
+
+  // Generic breakout trend carry-forward: reward recent upward trajectory for skill players.
+  if (
+    ["receiving_yards", "receptions", "receiving_tds", "rushing_yards", "scrimmage_yards", "rushing_tds"].includes(metric) &&
+    valid.length >= 2 &&
+    ["wr", "rb", "te"].includes(posGroup)
+  ) {
+    const latest = Number(valid[0]?.[metric]);
+    const prior = Number(valid[1]?.[metric]);
+    const latestGames = Number(valid[0]?.games || 0);
+    if (Number.isFinite(latest) && Number.isFinite(prior) && prior > 0 && latest > prior && latestGames >= 12) {
+      const growth = (latest - prior) / prior;
+      const trendBoost = 1 + clamp(growth * 0.24, 0, 0.14);
+      lambda = clamp(lambda * trendBoost, 0.02, 3000);
+    }
+  }
 
   return {
     lambda,
@@ -564,6 +615,38 @@ export function buildPlayerSeasonStatEstimate(prompt, intent, profile, asOfDate,
     const yardsSigma = clamp(360 + lambda * 0.08, 340, 900);
     tailProb = normalTailAtLeast(lambda, yardsSigma, parsed.threshold);
     probabilityPct = clamp(tailProb * 100, 0.01, 99.9);
+  }
+  if (["receiving_yards", "rushing_yards", "receptions", "scrimmage_yards", "rushing_tds", "receiving_tds"].includes(parsed.metric)) {
+    const seasons = getSkillPlayerSeasons(profile);
+    if (seasons.length >= 2) {
+      const vals = seasons
+        .map((s) => Number(s?.[parsed.metric]))
+        .filter((v) => Number.isFinite(v));
+      if (vals.length >= 2) {
+        const hits = vals.filter((v) => v >= parsed.threshold).length;
+        const near = vals.filter((v) => v >= parsed.threshold * 0.9).length;
+        const empiricalHitPct = (hits / vals.length) * 100;
+        const empiricalNearPct = (near / vals.length) * 100;
+        const sampleWeight = clamp(vals.length / 8, 0.2, 0.65);
+        const nearFloorPct = clamp(empiricalNearPct * 0.62, 0, 95);
+        const blended = probabilityPct * (1 - sampleWeight) + empiricalHitPct * sampleWeight;
+        probabilityPct = clamp(Math.max(blended, nearFloorPct), 0.01, 99.9);
+      }
+    }
+    const recent = seasons[0] || null;
+    if (recent && Number(recent.games || 0) >= 12) {
+      const recentValue = Number(recent?.[parsed.metric] || 0);
+      if (Number.isFinite(recentValue) && recentValue > 0 && parsed.threshold > 0) {
+        // Generic breakout carry-forward floor: if a player recently cleared a threshold by a lot,
+        // keep that threshold meaningfully favored unless explicit negative context exists.
+        const ratio = recentValue / parsed.threshold;
+        if (ratio >= 1) {
+          const durabilityBoost = Number(recent.games || 0) >= 15 ? 8 : 4;
+          const floor = clamp(45 + (ratio - 1) * 120 + durabilityBoost, 45, 92);
+          probabilityPct = Math.max(probabilityPct, floor);
+        }
+      }
+    }
   }
 
   return {

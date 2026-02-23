@@ -33,15 +33,20 @@
         <form id="odds-form" novalidate>
           <label for="scenario-input" class="prompt-label">What are the odds that...</label>
           <div class="input-row">
-            <textarea
-              id="scenario-input"
-              name="scenario"
-              rows="1"
-              maxlength="220"
-              placeholder="Josh Allen throws 30 touchdowns this season"
-              required
-            ></textarea>
-            <button id="flip-btn" class="flip-btn hidden" type="button" aria-label="Flip two-sided prompt">Flip</button>
+            <div class="scenario-wrap">
+              <textarea
+                id="scenario-input"
+                name="scenario"
+                rows="1"
+                maxlength="220"
+                placeholder="Josh Allen throws 30 touchdowns this season"
+                required
+              ></textarea>
+              <button id="flip-btn" class="flip-btn" type="button" aria-label="Flip two-sided prompt" title="Flip sides">
+                <span class="flip-icon" aria-hidden="true">↺</span>
+              </button>
+              <p id="flip-tip" class="flip-tip hidden">Flip it to see the other side.</p>
+            </div>
             <button id="submit-btn" type="submit">Estimate</button>
           </div>
         </form>

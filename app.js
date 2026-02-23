@@ -1,6 +1,7 @@
 const form = document.getElementById("odds-form");
 const scenarioInput = document.getElementById("scenario-input");
 const flipBtn = document.getElementById("flip-btn");
+const flipTip = document.getElementById("flip-tip");
 const submitBtn = document.getElementById("submit-btn");
 const resultCard = document.getElementById("result-card");
 const refusalCard = document.getElementById("refusal-card");
@@ -75,6 +76,8 @@ let primaryPlayerInfo = null;
 let secondaryPlayerInfo = null;
 let allowFeedbackForCurrentResult = false;
 let profileHideTimer = null;
+let flipTipTimer = null;
+let lastFlipTipKey = "";
 
 const NFL_TEAM_ABBR = {
   "arizona cardinals": "ARI",
@@ -134,7 +137,7 @@ function setBusy(isBusy) {
   submitBtn.textContent = isBusy ? "Estimating..." : "Estimate";
   submitBtn.classList.toggle("is-loading", isBusy);
   if (flipBtn) {
-    const shouldDisable = isBusy || flipBtn.classList.contains("hidden");
+    const shouldDisable = isBusy || !flipBtn.classList.contains("is-visible");
     flipBtn.disabled = shouldDisable;
   }
 }
@@ -171,8 +174,27 @@ function updateFlipButtonVisibility(result = null) {
   if (!flipBtn) return;
   const prompt = normalizePrompt(scenarioInput.value);
   const show = isTwoSidedPrompt(prompt, result);
-  flipBtn.classList.toggle("hidden", !show);
+  flipBtn.classList.toggle("is-visible", show);
   flipBtn.disabled = !show || submitBtn.disabled;
+  if (!show && flipTip) {
+    flipTip.classList.remove("show");
+    flipTip.classList.add("hidden");
+  }
+  if (show && flipTip) {
+    const key = prompt.toLowerCase();
+    if (key && key !== lastFlipTipKey) {
+      lastFlipTipKey = key;
+      flipTip.classList.remove("hidden");
+      flipTip.classList.remove("show");
+      void flipTip.offsetWidth;
+      flipTip.classList.add("show");
+      if (flipTipTimer) clearTimeout(flipTipTimer);
+      flipTipTimer = setTimeout(() => {
+        flipTip.classList.remove("show");
+        flipTip.classList.add("hidden");
+      }, 2500);
+    }
+  }
 }
 
 function flipCurrentPromptAndEstimate() {

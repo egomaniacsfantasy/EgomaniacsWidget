@@ -120,9 +120,13 @@ h1 {
 
 .input-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto;
   gap: 10px;
   align-items: stretch;
+}
+
+.scenario-wrap {
+  position: relative;
 }
 
 textarea {
@@ -139,6 +143,10 @@ textarea {
   min-height: 48px;
   overflow-y: auto;
   transition: border-color 160ms ease;
+}
+
+.scenario-wrap textarea {
+  padding-right: 54px;
 }
 
 textarea::placeholder {
@@ -176,29 +184,74 @@ button {
 }
 
 #flip-btn {
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--card) 85%, #f2ead7 15%);
-  color: var(--text);
-  font-weight: 600;
-  padding: 12px 14px;
-  min-height: 48px;
-  height: 48px;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%) scale(0.92);
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(199, 183, 155, 0.45);
+  border-radius: 999px;
+  background: rgba(12, 17, 23, 0.82);
+  color: #f7f1e2;
+  font-weight: 700;
+  padding: 0;
   cursor: pointer;
-  transition: border-color 160ms ease, transform 100ms ease, opacity 100ms ease;
+  opacity: 0;
+  pointer-events: none;
+  transition: border-color 160ms ease, transform 180ms ease, opacity 180ms ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+#flip-btn.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(-50%) scale(1);
 }
 
 #flip-btn:hover {
-  border-color: #bc8c55;
+  border-color: #f0d29a;
+  background: rgba(18, 25, 34, 0.92);
 }
 
 #flip-btn:active {
-  transform: translateY(1px);
+  transform: translateY(-50%) scale(0.96);
 }
 
 #flip-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+#flip-btn .flip-icon {
+  font-size: 18px;
+  line-height: 1;
+  transform: translateY(-1px);
+  text-shadow: 0 0 14px rgba(255, 227, 159, 0.35);
+}
+
+.flip-tip {
+  position: absolute;
+  right: 0;
+  top: -28px;
+  margin: 0;
+  font-size: 0.72rem;
+  color: #dbcfb7;
+  background: rgba(21, 17, 12, 0.8);
+  border: 1px solid rgba(183, 148, 89, 0.42);
+  border-radius: 999px;
+  padding: 4px 9px;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+}
+
+.flip-tip.show {
+  animation: flipTipInOut 2.4s ease forwards;
 }
 
 #submit-btn:active {
@@ -1076,6 +1129,22 @@ button {
   }
 }
 
+@keyframes flipTipInOut {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  15%,
+  78% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
 @media (max-width: 640px) {
   body {
     padding: 22px 12px 26px;
@@ -1091,11 +1160,17 @@ button {
   }
 
   #flip-btn {
-    width: 100%;
+    right: 9px;
   }
 
   #submit-btn {
     width: 100%;
+  }
+
+  .flip-tip {
+    right: 6px;
+    top: -24px;
+    font-size: 0.68rem;
   }
 
   .player-headshot {

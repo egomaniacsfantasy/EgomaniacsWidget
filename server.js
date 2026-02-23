@@ -7856,7 +7856,7 @@ app.get("/api/feedback/admin", async (req, res) => {
     const voteFilter = String(req.query?.vote || "").trim().toLowerCase(); // up/down/none/all
     const q = String(req.query?.q || "").trim().toLowerCase();
     const limitRaw = Number(req.query?.limit);
-    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(2000, Math.floor(limitRaw))) : 500;
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(50000, Math.floor(limitRaw))) : 10000;
 
     const [queries, feedback] = await Promise.all([readOddsQueryEvents(), readFeedbackEvents()]);
     const voteByRequestId = new Map();
@@ -7908,6 +7908,7 @@ app.get("/api/feedback/admin", async (req, res) => {
       thumbsDown: down,
       noVote: none,
       count: ordered.length,
+      limitUsed: limit,
       events: ordered,
       files: {
         queries: ODDS_QUERY_EVENTS_FILE,
@@ -8102,7 +8103,7 @@ app.get("/feedback", (_req, res) => {
       const vote = voteFilterEl.value || "all";
       const q = String(searchInput?.value || "").trim();
       const qs = new URLSearchParams();
-      qs.set("limit", "1000");
+      qs.set("limit", "10000");
       qs.set("vote", vote);
       if (q) qs.set("q", q);
       const r = await fetch("/api/feedback/admin?" + qs.toString());

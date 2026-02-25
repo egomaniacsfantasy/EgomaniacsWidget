@@ -940,22 +940,17 @@ async function copyCurrentResult() {
 }
 
 async function createShareBlob() {
-  if (!window.html2canvas) {
-    throw new Error("Share renderer unavailable.");
-  }
-  const isiOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
-  const canvas = await window.html2canvas(shareCard, {
-    backgroundColor: "#1e1810",
-    scale: isiOS ? 1.25 : 1.6,
-    useCORS: true,
-    logging: false,
-  });
-
+  const shareData = getCurrentShareData();
+  const canvas = await generateShareCard(shareData);
   return await new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (blob) resolve(blob);
-      else reject(new Error("Could not build image."));
-    }, "image/jpeg", 0.9);
+    canvas.toBlob(
+      (blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("Could not build image."));
+      },
+      "image/jpeg",
+      0.95
+    );
   });
 }
 
@@ -967,38 +962,409 @@ async function shareCurrentResult() {
   shareBtn.textContent = "Preparing...";
   try {
     const blob = await createShareBlob();
-    const file = new File([blob], "egomaniacs-odds.jpg", { type: "image/jpeg" });
-    const shareText = `${promptSummary.textContent} — ${oddsOutput.textContent}`;
-
-    const canShareFiles =
-      typeof navigator.share === "function" &&
-      typeof navigator.canShare === "function" &&
-      navigator.canShare({ files: [file] });
-    if (canShareFiles) {
-      await navigator.share({
-        files: [file],
-        title: "What Are the Odds?",
-        text: shareText,
-      });
-      statusLine.textContent = "Share card ready. Sent.";
-      return;
-    }
-
+    const oddsSlug = String(oddsOutput.textContent || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\+/g, "plus")
+      .replace(/-/g, "minus")
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9-]/g, "");
+    const filename = `odds-gods-${oddsSlug || "estimate"}.jpg`;
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "egomaniacs-odds.jpg";
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(url);
-    statusLine.textContent = "Share image downloaded. Send it anywhere.";
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+    const query = normalizeSummaryText(queryEcho?.textContent || scenarioInput.value || "");
+    const tweetText =
+      `Odds Gods says ${String(oddsOutput.textContent || "").trim()} — ${query}.\n\n` +
+      `Somebody tell me I'm wrong.\n\noddsgods.com/odds`;
+    setTimeout(() => {
+      window.open(
+        `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}`,
+        "_blank",
+        "noopener,noreferrer"
+      );
+    }, 400);
+    statusLine.textContent = "Share image downloaded.";
   } catch (_error) {
     statusLine.textContent = "Could not generate share image right now.";
   } finally {
     shareBtn.disabled = false;
     shareBtn.textContent = oldText;
   }
+}
+
+function hashQuery(text) {
+  let hash = 0;
+  const input = String(text || "");
+  for (let i = 0; i < input.length; i += 1) {
+    hash = (hash + input.charCodeAt(i) * (i + 1)) >>> 0;
+  }
+  return hash || 1;
+}
+
+function seededRng(seed) {
+  let s = Math.max(1, Number(seed) || 1);
+  return () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  const rr = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
+}
+
+function wrapText(ctx, text, maxWidth) {
+  const words = String(text || "").split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const lines = [];
+  let line = "";
+  words.forEach((word) => {
+    const test = line ? `${line} ${word}` : word;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = test;
+    }
+  });
+  if (line) lines.push(line);
+  return lines;
+}
+
+function addCanvasGrain(ctx, w, h, opacity = 0.03) {
+  const gc = document.createElement("canvas");
+  gc.width = w;
+  gc.height = h;
+  const gx = gc.getContext("2d");
+  const img = gx.createImageData(w, h);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = Math.random() * 255;
+    img.data[i] = v;
+    img.data[i + 1] = v;
+    img.data[i + 2] = v;
+    img.data[i + 3] = Math.random() * opacity * 255;
+  }
+  gx.putImageData(img, 0, 0);
+  ctx.drawImage(gc, 0, 0);
+}
+
+function getCurrentShareData() {
+  const query = normalizeSummaryText(queryEcho?.textContent || scenarioInput.value || "");
+  const oddsStr = String(oddsOutput.textContent || "").trim();
+  const impliedStr = String(probabilityOutput.textContent || "").trim();
+  const entityLabel = normalizeSummaryText(promptSummary.textContent || query || "");
+  const primaryCluster = document.querySelector("#entity-strip img.entity-avatar");
+  const primaryHeadshot =
+    (primaryCluster && primaryCluster.getAttribute("src")) ||
+    playerHeadshot?.getAttribute("src") ||
+    null;
+  return { query, oddsStr, impliedStr, entityLabel, playerHeadshotUrl: primaryHeadshot };
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+function drawBolt(ctx, pts, color, lineWidth) {
+  if (!pts || pts.length < 2) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i += 1) {
+    ctx.lineTo(pts[i][0], pts[i][1]);
+  }
+  ctx.stroke();
+}
+
+function genBolt(bRng, x1, y1, x2, y2, disp, depth) {
+  if (depth === 0) return [[x1, y1], [x2, y2]];
+  const mx = (x1 + x2) / 2 + (bRng() - 0.5) * disp;
+  const my = (y1 + y2) / 2 + (bRng() - 0.5) * disp;
+  const left = genBolt(bRng, x1, y1, mx, my, disp * 0.55, depth - 1);
+  const right = genBolt(bRng, mx, my, x2, y2, disp * 0.55, depth - 1);
+  return [...left, ...right.slice(1)];
+}
+
+async function generateShareCard({ query, oddsStr, impliedStr, entityLabel, playerHeadshotUrl }) {
+  const SIZE = 1200;
+  const canvas = document.createElement("canvas");
+  canvas.width = SIZE;
+  canvas.height = SIZE;
+  const ctx = canvas.getContext("2d");
+  const normalizedQuery = normalizeSummaryText(query || "What Are the Odds?");
+  const queryHash = hashQuery(normalizedQuery);
+  const rng = seededRng(queryHash * 31337);
+  const boltRng = seededRng(queryHash * 99991);
+
+  let logoImg = null;
+  let playerImg = null;
+  try {
+    logoImg = await loadImage("/logo-icon.png");
+  } catch (_error) {
+    logoImg = null;
+  }
+  if (playerHeadshotUrl) {
+    try {
+      playerImg = await loadImage(playerHeadshotUrl);
+    } catch (_error) {
+      playerImg = null;
+    }
+  }
+
+  // Rounded-corner clip region.
+  ctx.fillStyle = "#090805";
+  ctx.fillRect(0, 0, SIZE, SIZE);
+  ctx.save();
+  roundRectPath(ctx, 8, 8, SIZE - 16, SIZE - 16, 38);
+  ctx.clip();
+
+  // Layer 1.
+  ctx.fillStyle = "#0e0c09";
+  ctx.fillRect(0, 0, SIZE, SIZE);
+
+  // Layer 2.
+  const g1 = ctx.createRadialGradient(600, 1340, 0, 600, 1340, 820);
+  g1.addColorStop(0, "rgba(139,90,18,0.58)");
+  g1.addColorStop(0.5, "rgba(139,90,18,0.20)");
+  g1.addColorStop(1, "rgba(139,90,18,0)");
+  ctx.fillStyle = g1;
+  ctx.fillRect(0, 0, SIZE, SIZE);
+
+  const g2 = ctx.createRadialGradient(1120, 60, 0, 1120, 60, 440);
+  g2.addColorStop(0, "rgba(110,70,12,0.34)");
+  g2.addColorStop(1, "rgba(110,70,12,0)");
+  ctx.fillStyle = g2;
+  ctx.fillRect(0, 0, SIZE, SIZE);
+
+  // Layer 3.
+  const FRAGS = [
+    "-110", "+3300", "-450", "+220", "EVEN", "-175", "+550", "-3040", "+1400", "-800", "+290", "+6500",
+    "+105", "-190", "+380", "+4500", "XIV", "XLVIII", "IX", "MMXXV", "XCIX", "IV", "LXIII", "LVII", "VII",
+    "XVI", "XLII", "XXXII", "Σ", "Δ", "μ", "σ", "π", "Ω", "β", "λ", "φ", "ALEA IACTA EST", "SORS",
+    "PROBABILITAS", "FATA", "RATIO", "EVENTUS", "CALCULUS", "VINCULUM", "45.3 WIN%", "61.2%", "28.6% IMP",
+    "73.4%", "19.2% IMP", "88.1%", "33.3%", "4,832 YDS", "38 TD", "QBR 84.2", "DVOA +24.8", "EPA/P 0.24",
+    "CPOE +4.1", "ELO 1842", "KC -450", "PHI -3.5", "BAL -6.5", "SF ML -175",
+  ];
+  const SERIF_FRAGS = new Set([
+    "ALEA IACTA EST", "SORS", "PROBABILITAS", "FATA", "RATIO", "EVENTUS", "CALCULUS", "VINCULUM",
+    "XIV", "VII", "IX", "MMXXV", "XLVIII", "XCIX", "LVII", "LXIII", "XVI", "IV", "XLII", "XXXII",
+  ]);
+  const placed = [];
+  let count = 0;
+  while (count < 108) {
+    const txt = FRAGS[Math.floor(rng() * FRAGS.length)];
+    const serif = SERIF_FRAGS.has(txt) || /[ΣΔμσπΩβλφ]/.test(txt);
+    const size = serif ? 18 + Math.floor(rng() * 14) : 14 + Math.floor(rng() * 12);
+    ctx.font = serif ? `400 ${size}px "Instrument Serif",serif` : `400 ${size}px "Space Grotesk",monospace`;
+    const tw = ctx.measureText(txt).width;
+    const th = size * 1.3;
+    const x = rng() * (SIZE - tw - 20) + 10;
+    const y = rng() * (SIZE - th - 20) + 10;
+    const r0 = [x - 6, y - 4, x + tw + 6, y + th + 4];
+    if (!placed.some((o) => r0[0] < o[2] && r0[2] > o[0] && r0[1] < o[3] && r0[3] > o[1])) {
+      ctx.globalAlpha = 0.018 + rng() * 0.02;
+      ctx.fillStyle = "#f0e6d0";
+      ctx.textAlign = "left";
+      ctx.fillText(txt, x, y + th * 0.8);
+      placed.push(r0);
+      count += 1;
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // Layer 4.
+  const bolt = genBolt(boltRng, 984, 24, 660, 648, 65, 5);
+  const mid = bolt[Math.floor(bolt.length * 0.35)];
+  const branch = genBolt(boltRng, mid[0], mid[1], mid[0] + 90 + boltRng() * 60, mid[1] + 70 + boltRng() * 50, 30, 3);
+  drawBolt(ctx, bolt, "rgba(184,125,24,0.020)", 20);
+  drawBolt(ctx, bolt, "rgba(184,125,24,0.036)", 12);
+  drawBolt(ctx, bolt, "rgba(184,125,24,0.055)", 6);
+  drawBolt(ctx, bolt, "rgba(184,125,24,0.044)", 3);
+  drawBolt(ctx, bolt, "rgba(240,230,208,0.070)", 1);
+  drawBolt(ctx, branch, "rgba(184,125,24,0.026)", 5);
+  drawBolt(ctx, branch, "rgba(184,125,24,0.040)", 2);
+
+  // Layer 5.
+  ctx.strokeStyle = "rgba(184,125,24,0.20)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, SIZE - 2, SIZE - 2);
+  [[56, 56, 1, 1], [1144, 56, -1, 1], [56, 1144, 1, -1], [1144, 1144, -1, -1]].forEach(([x, y, dx, dy]) => {
+    ctx.strokeStyle = "rgba(184,125,24,0.68)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + dx * 60, y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x, y + dy * 60);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(184,125,24,0.52)";
+    ctx.beginPath();
+    ctx.arc(x + dx * 6, y + dy * 6, 4, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Layer 6.
+  if (logoImg) ctx.drawImage(logoImg, 56, 50, 48, 48);
+  ctx.font = '700 24px "Space Grotesk",monospace';
+  ctx.fillStyle = "rgba(240,230,208,0.80)";
+  ctx.textAlign = "left";
+  ctx.fillText("ODDS GODS", 116, 83);
+
+  // Layer 7.
+  ctx.font = '400 19px "Space Grotesk",monospace';
+  ctx.fillStyle = "rgba(240,230,208,0.36)";
+  ctx.textAlign = "center";
+  ctx.fillText("WHAT ARE THE ODDS THAT...", 600, 226);
+
+  // Layer 8.
+  const qSize = normalizedQuery.length < 48 ? 46 : normalizedQuery.length < 70 ? 38 : 32;
+  ctx.font = `italic 400 ${qSize}px "Instrument Serif",serif`;
+  ctx.fillStyle = "rgba(240,230,208,0.90)";
+  ctx.textAlign = "center";
+  const qLines = wrapText(ctx, normalizedQuery, 980);
+  const qLineH = qSize * 1.38;
+  let qY = 274;
+  qLines.forEach((line) => {
+    ctx.fillText(line, 600, qY);
+    qY += qLineH;
+  });
+  const qBottom = qY;
+
+  // Layer 9.
+  const ruleY = qBottom + 22;
+  ctx.strokeStyle = "rgba(184,125,24,0.40)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(300, ruleY);
+  ctx.lineTo(900, ruleY);
+  ctx.stroke();
+
+  // Layer 10.
+  const HS_R = 84;
+  const HS_CX = 600;
+  const HS_CY = ruleY + 36 + HS_R;
+  if (playerImg) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(HS_CX, HS_CY, HS_R, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.drawImage(playerImg, HS_CX - HS_R, HS_CY - HS_R, HS_R * 2, HS_R * 2);
+    ctx.restore();
+    ctx.strokeStyle = "rgba(184,125,24,0.50)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(HS_CX, HS_CY, HS_R + 3, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(184,125,24,0.14)";
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.arc(HS_CX, HS_CY, HS_R + 12, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  const headshotBottom = playerImg ? HS_CY + HS_R + 8 : ruleY + 20;
+
+  // Layer 11.
+  const ODDS_SIZE = 200;
+  ctx.font = `400 ${ODDS_SIZE}px "Space Grotesk",monospace`;
+  ctx.textAlign = "center";
+  const value = String(oddsStr || "").trim().toUpperCase();
+  const isPos = value.startsWith("+");
+  const isEven = value === "EVEN";
+  ctx.fillStyle = isPos
+    ? "rgba(74,222,128,0.96)"
+    : isEven
+      ? "rgba(184,125,24,0.96)"
+      : "rgba(248,113,113,0.96)";
+  ctx.shadowColor = "rgba(0,0,0,0.60)";
+  ctx.shadowBlur = 20;
+  ctx.shadowOffsetX = 4;
+  ctx.shadowOffsetY = 4;
+  const oddsY = headshotBottom + 24;
+  ctx.fillText(value || "N/A", 600, oddsY + ODDS_SIZE * 0.8);
+  ctx.shadowColor = "transparent";
+  const oddsBottom = oddsY + ODDS_SIZE * 0.92;
+
+  // Layer 12.
+  const chipText = String(entityLabel || "").trim() || "Hypothetical NFL estimate";
+  const chipY = oddsBottom + 16;
+  ctx.font = '600 26px "Space Grotesk",monospace';
+  const chipTW = ctx.measureText(chipText).width;
+  const chipW = Math.min(1020, chipTW + 48);
+  const chipH = 56;
+  const chipX = 600 - chipW / 2;
+  ctx.fillStyle = "rgba(26,21,13,0.92)";
+  roundRectPath(ctx, chipX, chipY, chipW, chipH, 5);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(184,125,24,0.30)";
+  ctx.lineWidth = 1;
+  roundRectPath(ctx, chipX, chipY, chipW, chipH, 5);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(240,230,208,0.78)";
+  const chipLines = wrapText(ctx, chipText, chipW - 36).slice(0, 2);
+  const chipCenterY = chipY + chipH / 2 + (chipLines.length === 2 ? -7 : 0);
+  chipLines.forEach((line, idx) => {
+    ctx.fillText(line, 600, chipCenterY + idx * 26);
+  });
+  const chipBottom = chipY + chipH;
+
+  // Layer 13.
+  const implLabelY = chipBottom + 30;
+  ctx.font = '400 19px "Space Grotesk",monospace';
+  ctx.fillStyle = "rgba(240,230,208,0.36)";
+  ctx.fillText("IMPLIED PROBABILITY", 600, implLabelY);
+  ctx.font = '700 54px "Space Grotesk",monospace';
+  ctx.fillStyle = "rgba(240,230,208,0.84)";
+  ctx.fillText(String(impliedStr || "").trim() || "N/A", 600, implLabelY + 62);
+
+  // Layer 14.
+  const barY = 1108;
+  ctx.strokeStyle = "rgba(184,125,24,0.26)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(56, barY);
+  ctx.lineTo(1144, barY);
+  ctx.stroke();
+  if (logoImg) ctx.drawImage(logoImg, 56, barY + 12, 30, 30);
+  ctx.font = '700 26px "Space Grotesk",monospace';
+  ctx.fillStyle = "rgba(184,125,24,0.82)";
+  ctx.textAlign = "left";
+  ctx.fillText("oddsgods.com", 98, barY + 33);
+  ctx.font = '400 17px "Space Grotesk",monospace';
+  ctx.fillStyle = "rgba(240,230,208,0.22)";
+  ctx.textAlign = "right";
+  ctx.fillText("Hypothetical estimate · Not betting advice", 1144, barY + 33);
+
+  // Layer 15.
+  addCanvasGrain(ctx, SIZE, SIZE, 0.03);
+  ctx.restore();
+  return canvas;
 }
 
 function hydrateFromUrl() {

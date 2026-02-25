@@ -247,14 +247,14 @@ body {
   color: var(--text-primary);
   height: 78px;
   min-height: 78px;
-  padding: 20px var(--space-6);
+  padding: 0 var(--space-6);
   padding-right: 188px;
-  line-height: 1.15;
+  line-height: 78px;
   caret-color: var(--amber);
-  resize: none;
-  max-height: 140px;
-  overflow-y: auto;
   display: block;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
 }
 
 .prompt-input::placeholder {
@@ -485,25 +485,25 @@ body {
   font-family: var(--font-mono);
   font-size: clamp(52px, 8.8vw, 72px);
   font-weight: 400;
-  color: #f1e7cf;
+  color: #f1e7cf !important;
   line-height: 1;
   letter-spacing: -0.02em;
   margin-bottom: 10px;
   text-shadow:
     0 0 7px rgba(255, 255, 255, 0.2),
-    0 0 22px rgba(224, 191, 130, 0.24);
+    0 0 22px rgba(224, 191, 130, 0.24) !important;
 }
 
 .odds-output.positive {
-  color: #f1e7cf;
+  color: #f1e7cf !important;
 }
 
 .odds-output.negative {
-  color: #f1e7cf;
+  color: #f1e7cf !important;
 }
 
 .odds-output.even {
-  color: #f1e7cf;
+  color: #f1e7cf !important;
 }
 
 .odds-output.lock-mode {
@@ -1060,8 +1060,9 @@ body {
     min-height: 74px;
     height: 74px;
     padding-right: 136px;
-    padding-top: 18px;
-    padding-bottom: 18px;
+    padding-top: 0;
+    padding-bottom: 0;
+    line-height: 74px;
     font-size: 20px;
   }
 

@@ -662,6 +662,34 @@ function buildPlayerMovementSnarkResponse() {
   };
 }
 
+function hasSevereHarmIntent(prompt) {
+  const lower = normalizePrompt(prompt);
+  return /\b(dies?|died|death|dead|killed|kills|murder|suicide|overdose|paralyzed|coma)\b/.test(lower);
+}
+
+function buildSevereHarmRefusalResponse() {
+  return {
+    status: "snark",
+    title: "Out Of Bounds.",
+    message: "I’m not answering prompts about death or severe harm.",
+    hint: "Try an on-field NFL outcome instead.",
+  };
+}
+
+function hasRondaleMoorePrompt(prompt) {
+  const lower = normalizePrompt(prompt);
+  return /\brondale\s+moore\b/.test(lower);
+}
+
+function buildRondaleMooreRefusalResponse() {
+  return {
+    status: "snark",
+    title: "No Comment.",
+    message: "I’m not answering that.",
+    hint: "Try another NFL player or team scenario.",
+  };
+}
+
 function shouldAllowLlmLastResort(prompt, context = {}) {
   const lower = normalizePrompt(prompt);
   if (!hasMeasurableOutcomeIntent(prompt)) return false;
@@ -6657,6 +6685,16 @@ app.post("/api/odds", async (req, res) => {
     if (isLikelyGibberishPrompt(promptForParsing)) {
       metrics.snarks += 1;
       return res.json(buildGibberishSnarkResponse());
+    }
+
+    if (hasSevereHarmIntent(promptForParsing)) {
+      metrics.snarks += 1;
+      return res.json(buildSevereHarmRefusalResponse());
+    }
+
+    if (hasRondaleMoorePrompt(promptForParsing)) {
+      metrics.snarks += 1;
+      return res.json(buildRondaleMooreRefusalResponse());
     }
 
     if (shouldRefuse(promptForParsing)) {

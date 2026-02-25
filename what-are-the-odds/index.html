@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Odds Gods | What Are the Odds?</title>
+    <meta
+      name="description"
+      content="What Are the Odds? by Odds Gods. Instant hypothetical American odds estimates for NFL scenarios."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body>
+    <div class="bg-glow" aria-hidden="true"></div>
+    <canvas id="bg-stats" class="bg-canvas" aria-hidden="true"></canvas>
+    <canvas id="bg-lightning" class="bg-canvas" aria-hidden="true"></canvas>
+    <canvas id="bg-text" class="bg-canvas" aria-hidden="true"></canvas>
+
+    <header class="og-nav" id="site-nav">
+      <div class="og-nav-inner">
+        <a class="og-wordmark" href="/"><span>ODDS</span> <strong>GODS</strong></a>
+        <nav class="og-links" id="nav-links">
+          <a href="/bracket/">The Bracket Lab</a>
+          <a href="/what-are-the-odds/" class="is-active">What Are the Odds?</a>
+          <a class="btn btn-launch" href="/bracket/">Launch</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="wato-root">
+      <section class="wato-content" id="wato-content" aria-label="What Are the Odds widget">
+        <header class="wato-header">
+          <p class="wato-eyebrow">ODDS GODS</p>
+          <h1 class="wato-headline">What Are the <span class="accent">Odds?</span></h1>
+        </header>
+
+        <form id="odds-form" novalidate>
+          <label for="scenario-input" class="prompt-label">What are the odds that...</label>
+          <div class="input-row">
+            <div id="prompt-container" class="prompt-container">
+              <textarea
+                id="scenario-input"
+                class="prompt-input"
+                name="scenario"
+                rows="1"
+                maxlength="220"
+                placeholder="Josh Allen throws 30 touchdowns this season"
+                required
+              ></textarea>
+              <button id="flip-btn" class="flip-button hidden" type="button" aria-label="Flip sides">
+                <span class="flip-button-icon">↺</span>
+              </button>
+              <button id="submit-btn" class="prompt-submit" type="submit">Estimate</button>
+              <p id="flip-tip" class="flip-tip hidden">Flip it and compare both sides.</p>
+            </div>
+          </div>
+        </form>
+
+        <article id="result-card" class="result-card hidden" aria-live="polite">
+          <div class="result-topline">
+            <p id="result-type-label" class="result-label">Estimated Odds</p>
+            <div class="result-actions share-row">
+              <button id="share-btn" class="copy-button" type="button">Share</button>
+              <button id="copy-btn" class="copy-button" type="button">Copy</button>
+            </div>
+          </div>
+
+          <p id="hof-warning" class="special-notice special-notice-text hidden">
+            <span class="special-notice-icon">!</span>
+            <span>We aren't all the way there yet with Hall of Fame prompts. But we're trying.</span>
+          </p>
+
+          <p id="prompt-summary" class="result-query"></p>
+
+          <div class="result-odds-row">
+            <p id="odds-output" class="odds-output result-odds-value">+400</p>
+            <p id="probability-output" class="result-implied">20.0% <span>implied</span></p>
+          </div>
+
+          <div id="player-headshot-wrap" class="player-headshot-wrap">
+            <div id="entity-strip" class="entity-strip hidden"></div>
+            <div id="player-headshot-cluster" class="player-headshot-cluster hidden">
+              <img id="player-headshot" class="player-headshot" alt="" loading="lazy" tabindex="0" />
+              <img id="player-headshot-secondary" class="player-headshot player-headshot-secondary hidden" alt="" loading="lazy" tabindex="0" />
+            </div>
+            <div id="headshot-profile-pop" class="headshot-profile-pop hidden" role="dialog" aria-live="polite">
+              <img id="headshot-profile-logo" class="headshot-profile-logo hidden" alt="" loading="lazy" />
+              <p id="headshot-profile-name" class="headshot-profile-name"></p>
+              <p id="headshot-profile-meta" class="headshot-profile-meta"></p>
+            </div>
+          </div>
+
+          <div class="result-summary">
+            <p id="source-line" class="source-line hidden"></p>
+            <p id="freshness-line" class="freshness-line hidden"></p>
+          </div>
+
+          <details id="rationale-panel" class="rationale-panel hidden result-rationale">
+            <summary class="rationale-toggle">Why this number?</summary>
+            <ul id="rationale-list"></ul>
+          </details>
+
+          <p id="disclaimer" class="disclaimer">
+            Hypothetical estimate for entertainment - not betting advice.
+          </p>
+        </article>
+
+        <section id="share-card" class="share-card-capture" aria-hidden="true">
+          <div class="share-card-shell">
+            <div class="share-pane share-pane-left">
+              <p class="share-kicker">ODDS GODS</p>
+              <h2 class="share-title">What Are the Odds?</h2>
+              <p class="share-subtitle">NFL hypothetical estimate</p>
+              <p class="share-disclaimer">Hypothetical estimate for entertainment - not betting advice.</p>
+            </div>
+            <div class="share-pane share-pane-right">
+              <p id="share-odds-output" class="share-odds">+400</p>
+              <p id="share-summary-output" class="share-summary">Drake Maye wins MVP this season</p>
+              <div class="share-meta">
+                <div>
+                  <p class="share-meta-label">Implied Probability</p>
+                  <p id="share-probability-output" class="share-meta-value">20.0%</p>
+                </div>
+                <div>
+                  <p class="share-meta-label">Source</p>
+                  <p id="share-source-output" class="share-meta-value">Hypothetical model</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <article id="refusal-card" class="result-card refusal hidden" aria-live="polite">
+          <p id="refusal-title" class="result-label">This tool can’t help with betting picks.</p>
+          <p id="refusal-copy" class="refusal-message">
+            What Are the Odds? provides hypothetical entertainment estimates only.
+          </p>
+          <p id="refusal-hint" class="disclaimer">Try a sports hypothetical instead.</p>
+        </article>
+
+        <p id="status-line" class="status-line" aria-live="polite"></p>
+
+        <section id="feedback-pop" class="feedback-pop hidden feedback-row" aria-live="polite">
+          <p id="feedback-question" class="feedback-label">Was this estimate helpful?</p>
+          <div class="feedback-actions">
+            <button id="feedback-up" class="feedback-btn thumb-button" type="button" aria-label="Thumbs up">👍</button>
+            <button id="feedback-down" class="feedback-btn thumb-button" type="button" aria-label="Thumbs down">👎</button>
+          </div>
+          <p id="feedback-thanks" class="feedback-thanks hidden">Thanks for your feedback.</p>
+        </section>
+
+        <div class="examples">
+          <p class="examples-best">For best results, ask questions involving skill-position players or teams.</p>
+          <p class="examples-label">Try one:</p>
+          <button type="button" class="example-chip">Patriots win the Super Bowl next season</button>
+          <button type="button" class="example-chip">Josh Allen wins MVP next year</button>
+          <button type="button" class="example-chip">A team goes 0-17</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <script src="../app.js"></script>
+  </body>
+</html>

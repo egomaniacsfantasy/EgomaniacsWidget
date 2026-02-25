@@ -506,8 +506,18 @@ function installExternalToolProxy(localPath, externalBase) {
 
 installExternalToolProxy("/bracket", BRACKET_APP_URL);
 installExternalToolProxy("/bracket-lab", BRACKET_APP_URL);
-installExternalToolProxy("/what-are-the-odds", WATO_APP_URL);
-installExternalToolProxy("/odds", WATO_APP_URL);
+// Keep WATO local-first to avoid accidental redirects/proxy loops.
+if (String(process.env.WATO_FORCE_PROXY || "").trim() === "1") {
+  installExternalToolProxy("/what-are-the-odds", WATO_APP_URL);
+  installExternalToolProxy("/odds", WATO_APP_URL);
+}
+
+app.get("/what-are-the-odds", (_req, res) => {
+  res.redirect(302, "/what-are-the-odds/");
+});
+app.get("/odds", (_req, res) => {
+  res.redirect(302, "/what-are-the-odds/");
+});
 
 app.use(express.static("."));
 

@@ -1,5 +1,7 @@
 const form = document.getElementById("odds-form");
 const scenarioInput = document.getElementById("scenario-input");
+const promptContainer = document.getElementById("prompt-container");
+const watoContent = document.getElementById("wato-content");
 const flipBtn = document.getElementById("flip-btn");
 const flipTip = document.getElementById("flip-tip");
 const submitBtn = document.getElementById("submit-btn");
@@ -40,7 +42,7 @@ const feedbackQuestion = document.getElementById("feedback-question");
 const feedbackUpBtn = document.getElementById("feedback-up");
 const feedbackDownBtn = document.getElementById("feedback-down");
 const feedbackThanks = document.getElementById("feedback-thanks");
-const PLACEHOLDER_ROTATE_MS = 3200;
+const PLACEHOLDER_ROTATE_MS = 3000;
 const EXAMPLE_REFRESH_MS = 12000;
 const CLIENT_API_VERSION = "2026.02.23.12";
 const FEEDBACK_RATED_MAP_KEY = "ewa_feedback_rated_map";
@@ -76,8 +78,7 @@ let primaryPlayerInfo = null;
 let secondaryPlayerInfo = null;
 let allowFeedbackForCurrentResult = false;
 let profileHideTimer = null;
-let flipTipTimer = null;
-let lastFlipTipKey = "";
+let flipTipSeen = false;
 
 const NFL_TEAM_ABBR = {
   "arizona cardinals": "ARI",
@@ -136,74 +137,50 @@ function setBusy(isBusy) {
   submitBtn.disabled = isBusy;
   submitBtn.textContent = isBusy ? "Estimating..." : "Estimate";
   submitBtn.classList.toggle("is-loading", isBusy);
+  promptContainer?.classList.toggle("loading", isBusy);
   if (flipBtn) {
-    const shouldDisable = isBusy || !flipBtn.classList.contains("is-visible");
-    flipBtn.disabled = shouldDisable;
+    flipBtn.disabled = isBusy;
   }
 }
 
-function splitTwoSidedBeforePrompt(prompt) {
-  const raw = String(prompt || "").trim().replace(/\s+/g, " ");
-  if (!raw) return null;
-  const match = raw.match(/^(.*?)\bbefore\b(.*)$/i);
-  if (!match) return null;
-  const left = String(match[1] || "").trim().replace(/[,\s]+$/, "");
-  const right = String(match[2] || "").trim().replace(/^[,\s]+/, "");
+function splitBeforePrompt(prompt) {
+  const text = normalizePrompt(prompt || "");
+  if (!text) return null;
+  const parts = text.split(/\bbefore\b/i);
+  if (parts.length < 2) return null;
+  const left = String(parts[0] || "").trim();
+  const right = String(parts.slice(1).join(" before ") || "").trim();
   if (!left || !right) return null;
   return { left, right };
 }
 
-function looksLikeYearDeadlineOnly(text) {
-  const t = String(text || "").trim().toLowerCase();
-  if (!t) return false;
-  if (/^(20\d{2})(\s*-\s*(?:20)?\d{2})?$/.test(t)) return true;
-  if (/^(the\s+year\s+)?20\d{2}$/.test(t)) return true;
-  return false;
+function isTwoSidedBeforePrompt(prompt) {
+  const parts = splitBeforePrompt(prompt);
+  if (!parts) return false;
+  if (/^(20\d{2})(\s*-\s*(?:20)?\d{2})?$/i.test(parts.right)) return false;
+  if (/\bbefore\s+20\d{2}\b/i.test(String(prompt || ""))) return false;
+  return true;
 }
 
-function isTwoSidedPrompt(prompt, result = null) {
-  const split = splitTwoSidedBeforePrompt(prompt);
-  if (!split) return false;
-  if (looksLikeYearDeadlineOnly(split.right)) return false;
-  if (result?.trace?.normalizedTwoSided) return true;
-  const sides = `${split.left} ${split.right}`.toLowerCase();
-  return /\b(win|wins|won|make|makes|made|get|gets|got|throw|throws|score|scores|scored|miss|go|goes|finish|finishes|reach|reaches|mvp|super bowl|afc|nfc|playoffs?|touchdowns?|yards?)\b/.test(sides);
-}
-
-function updateFlipButtonVisibility(result = null) {
+function updateFlipVisibility() {
   if (!flipBtn) return;
-  const prompt = normalizePrompt(scenarioInput.value);
-  const show = isTwoSidedPrompt(prompt, result);
-  flipBtn.classList.toggle("is-visible", show);
-  flipBtn.disabled = !show || submitBtn.disabled;
-  if (!show && flipTip) {
-    flipTip.classList.remove("show");
-    flipTip.classList.add("hidden");
+  const show = isTwoSidedBeforePrompt(scenarioInput.value);
+  flipBtn.classList.toggle("hidden", !show);
+  if (show && !flipTipSeen && flipTip) {
+    flipTip.classList.remove("hidden");
+    setTimeout(() => {
+      flipTip.classList.add("hidden");
+    }, 2300);
+    flipTipSeen = true;
   }
-  if (show && flipTip) {
-    const key = prompt.toLowerCase();
-    if (key && key !== lastFlipTipKey) {
-      lastFlipTipKey = key;
-      flipTip.classList.remove("hidden");
-      flipTip.classList.remove("show");
-      void flipTip.offsetWidth;
-      flipTip.classList.add("show");
-      if (flipTipTimer) clearTimeout(flipTipTimer);
-      flipTipTimer = setTimeout(() => {
-        flipTip.classList.remove("show");
-        flipTip.classList.add("hidden");
-      }, 2500);
-    }
-  }
+  if (!show && flipTip) flipTip.classList.add("hidden");
 }
 
-function flipCurrentPromptAndEstimate() {
-  const prompt = normalizePrompt(scenarioInput.value);
-  const split = splitTwoSidedBeforePrompt(prompt);
-  if (!split) return;
-  scenarioInput.value = `${split.right} before ${split.left}`.replace(/\s+/g, " ").trim();
-  updateFlipButtonVisibility();
-  scenarioInput.focus();
+function flipPrompt() {
+  const parts = splitBeforePrompt(scenarioInput.value);
+  if (!parts) return;
+  scenarioInput.value = `${parts.right} before ${parts.left}`;
+  updateFlipVisibility();
   form.requestSubmit();
 }
 
@@ -349,6 +326,8 @@ function maybeShowFeedback(prompt, result) {
   };
   feedbackQuestion.textContent = "Was this estimate helpful?";
   feedbackThanks.classList.add("hidden");
+  feedbackUpBtn?.classList.remove("selected-up", "selected-down");
+  feedbackDownBtn?.classList.remove("selected-up", "selected-down");
   feedbackPop.classList.remove("feedback-closing", "feedback-thanked");
   feedbackPop.classList.remove("hidden");
 }
@@ -357,6 +336,8 @@ async function submitFeedback(vote) {
   if (!feedbackContext || !["up", "down"].includes(vote)) return;
   feedbackUpBtn?.setAttribute("disabled", "true");
   feedbackDownBtn?.setAttribute("disabled", "true");
+  feedbackUpBtn?.classList.toggle("selected-up", vote === "up");
+  feedbackDownBtn?.classList.toggle("selected-down", vote === "down");
   feedbackPop.classList.add("feedback-thanked");
   feedbackThanks.classList.add("hidden");
   feedbackQuestion.textContent = "Thanks for your feedback!";
@@ -395,6 +376,7 @@ function parseAmericanOdds(oddsText) {
 
 function renderOddsDisplay(oddsText) {
   const n = parseAmericanOdds(oddsText);
+  oddsOutput.classList.remove("positive", "negative", "even");
   oddsOutput.classList.remove("live-shimmer", "heartbeat-glow");
   oddsOutput.style.animation = "none";
   void oddsOutput.offsetWidth;
@@ -414,6 +396,11 @@ function renderOddsDisplay(oddsText) {
   oddsOutput.classList.remove("lock-mode");
   oddsOutput.classList.add("live-shimmer", "heartbeat-glow");
   oddsOutput.textContent = oddsText;
+  if (n !== null) {
+    if (n > 0) oddsOutput.classList.add("positive");
+    else if (n < 0) oddsOutput.classList.add("negative");
+    else oddsOutput.classList.add("even");
+  }
   return "normal";
 }
 
@@ -783,7 +770,7 @@ function showResult(result, prompt) {
   } else {
     hideFeedbackPop();
   }
-  updateFlipButtonVisibility(result);
+  watoContent?.classList.add("has-result");
 }
 
 function showRefusal(message, options = {}) {
@@ -803,7 +790,7 @@ function showRefusal(message, options = {}) {
     "What Are the Odds? provides hypothetical entertainment estimates only. It does not provide sportsbook lines or betting advice.";
   refusalHint.textContent = options.hint || "Try a sports hypothetical instead.";
   statusLine.textContent = message || "Hypothetical entertainment odds only.";
-  updateFlipButtonVisibility();
+  watoContent?.classList.add("has-result");
 }
 
 function showSystemError(message) {
@@ -817,7 +804,7 @@ function showSystemError(message) {
   hideFeedbackPop();
   applyResultCardState("normal");
   statusLine.textContent = message;
-  updateFlipButtonVisibility();
+  watoContent?.classList.add("has-result");
 }
 
 function encodePromptInUrl(prompt) {
@@ -940,8 +927,10 @@ async function copyCurrentResult() {
   try {
     await navigator.clipboard.writeText(payload);
     copyBtn.textContent = "Copied";
+    copyBtn.classList.add("copied");
     setTimeout(() => {
       copyBtn.textContent = "Copy";
+      copyBtn.classList.remove("copied");
     }, 1300);
   } catch (_error) {
     statusLine.textContent = "Copy failed. You can still screenshot this result.";
@@ -1127,13 +1116,94 @@ async function hydrateLiveSuggestions() {
   }
 }
 
-form.addEventListener("submit", onSubmit);
-if (flipBtn) {
-  flipBtn.addEventListener("click", flipCurrentPromptAndEstimate);
+function startBackgroundLayers() {
+  const canvases = [
+    document.getElementById("bg-stats"),
+    document.getElementById("bg-lightning"),
+    document.getElementById("bg-text"),
+  ].filter(Boolean);
+  if (!canvases.length) return;
+
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const contexts = canvases.map((canvas) => canvas.getContext("2d"));
+  let frame = 0;
+
+  const resize = () => {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    canvases.forEach((canvas) => {
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+    });
+    contexts.forEach((ctx) => ctx?.setTransform(dpr, 0, 0, dpr, 0, 0));
+  };
+
+  const draw = () => {
+    frame += 1;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const t = frame * 0.01;
+    const [statsCtx, boltCtx, textCtx] = contexts;
+
+    if (statsCtx) {
+      statsCtx.clearRect(0, 0, w, h);
+      statsCtx.strokeStyle = "rgba(220,170,90,0.05)";
+      statsCtx.lineWidth = 1;
+      for (let i = 0; i < 14; i += 1) {
+        const y = (i + 1) * (h / 15);
+        statsCtx.beginPath();
+        statsCtx.moveTo(0, y + Math.sin(t + i) * 6);
+        statsCtx.lineTo(w, y + Math.cos(t + i * 0.8) * 6);
+        statsCtx.stroke();
+      }
+    }
+
+    if (boltCtx) {
+      boltCtx.clearRect(0, 0, w, h);
+      boltCtx.strokeStyle = "rgba(232,185,105,0.08)";
+      boltCtx.lineWidth = 1.3;
+      boltCtx.beginPath();
+      const x = w * 0.77;
+      boltCtx.moveTo(x, h * 0.05);
+      boltCtx.lineTo(x - 34, h * 0.24);
+      boltCtx.lineTo(x + 16, h * 0.24);
+      boltCtx.lineTo(x - 30, h * 0.46);
+      boltCtx.stroke();
+    }
+
+    if (textCtx) {
+      textCtx.clearRect(0, 0, w, h);
+      textCtx.fillStyle = "rgba(210,197,168,0.06)";
+      textCtx.font = "12px Space Grotesk";
+      const words = ["XIII", "YPA", "DVOA", "EPA", "SB", "MVP", "W-L", "ANY/A", "QBR"];
+      for (let i = 0; i < 24; i += 1) {
+        const text = words[i % words.length];
+        const px = (i * 173 + (frame % 700)) % (w + 180) - 120;
+        const py = 40 + ((i * 89) % (h - 80));
+        textCtx.fillText(text, px, py);
+      }
+    }
+
+    window.requestAnimationFrame(draw);
+  };
+
+  resize();
+  draw();
+  window.addEventListener("resize", resize);
 }
+
+form.addEventListener("submit", onSubmit);
 copyBtn.addEventListener("click", copyCurrentResult);
 if (shareBtn) {
   shareBtn.addEventListener("click", shareCurrentResult);
+}
+if (flipBtn) {
+  flipBtn.addEventListener("click", (event) => {
+    event.preventDefault();
+    flipPrompt();
+  });
 }
 playerHeadshot.addEventListener("click", () => {
   if (!primaryPlayerInfo?.name) return;
@@ -1213,12 +1283,13 @@ scenarioInput.addEventListener("keydown", (event) => {
     form.requestSubmit();
   }
 });
-scenarioInput.addEventListener("input", () => updateFlipButtonVisibility());
+scenarioInput.addEventListener("input", updateFlipVisibility);
 const hasSharedPrompt = hydrateFromUrl();
 setupExampleChips();
 checkVersionHandshake();
 hydrateLiveSuggestions();
-updateFlipButtonVisibility();
+startBackgroundLayers();
+updateFlipVisibility();
 
 if (hasSharedPrompt) {
   form.requestSubmit();

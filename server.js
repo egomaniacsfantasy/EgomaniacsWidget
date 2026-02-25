@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPlayerOutcomes, buildPerformanceThresholdOutcome } from "./engine/outcomes.js";
@@ -43,21 +44,8 @@ const SLEEPER_NFL_PLAYERS_URL = "https://api.sleeper.app/v1/players/nfl";
 const PHASE2_CALIBRATION_FILE = process.env.PHASE2_CALIBRATION_FILE || "data/phase2_calibration.json";
 const ACCOLADES_INDEX_FILE = process.env.ACCOLADES_INDEX_FILE || "data/accolades_index.json";
 const MVP_PRIORS_FILE = process.env.MVP_PRIORS_FILE || "data/mvp_odds_2026_27_fanduel.json";
-const PERSISTENT_DATA_DIR =
-  process.env.PERSISTENT_DATA_DIR ||
-  process.env.RENDER_DISK_MOUNT_PATH ||
-  process.env.RENDER_DISK_PATH ||
-  "";
-const FEEDBACK_EVENTS_FILE =
-  process.env.FEEDBACK_EVENTS_FILE ||
-  (PERSISTENT_DATA_DIR
-    ? path.join(PERSISTENT_DATA_DIR, "feedback_events.jsonl")
-    : "data/feedback_events.jsonl");
-const ODDS_QUERY_EVENTS_FILE =
-  process.env.ODDS_QUERY_EVENTS_FILE ||
-  (PERSISTENT_DATA_DIR
-    ? path.join(PERSISTENT_DATA_DIR, "odds_query_events.jsonl")
-    : "data/odds_query_events.jsonl");
+const FEEDBACK_EVENTS_FILE = process.env.FEEDBACK_EVENTS_FILE || "data/feedback_events.jsonl";
+const ODDS_QUERY_EVENTS_FILE = process.env.ODDS_QUERY_EVENTS_FILE || "data/odds_query_events.jsonl";
 const FEATURE_ENABLE_TRACE = String(process.env.FEATURE_ENABLE_TRACE || "true") === "true";
 const STRICT_BOOT_SELFTEST = String(process.env.STRICT_BOOT_SELFTEST || "false") === "true";
 const execFileAsync = promisify(execFile);
@@ -409,6 +397,9 @@ const KNOWN_NON_PLAYER_FIGURES = [
   "jerry jones",
 ];
 
+const BRACKET_APP_URL = String(process.env.BRACKET_APP_URL || "").trim();
+const WATO_APP_URL = String(process.env.WATO_APP_URL || "").trim();
+
 const COMEBACK_PATTERNS = [
   /\breturns?\b/i,
   /\breturn(s|ing)? to play\b/i,
@@ -424,6 +415,100 @@ const RETIREMENT_PATTERNS = [
 ];
 
 app.use(express.json({ limit: "200kb" }));
+
+function normalizeExternalBase(url) {
+  return String(url || "").replace(/\/+$/, "");
+}
+
+function getProxyBody(req) {
+  if (req.method === "GET" || req.method === "HEAD") return undefined;
+  if (req.body && typeof req.body === "object") {
+    return JSON.stringify(req.body);
+  }
+  return req;
+}
+
+function copyProxyHeaders(incoming) {
+  const next = { ...incoming };
+  delete next.host;
+  delete next.connection;
+  delete next["content-length"];
+  delete next["accept-encoding"];
+  return next;
+}
+
+function installExternalToolProxy(localPath, externalBase) {
+  const normalizedBase = normalizeExternalBase(externalBase);
+  if (!normalizedBase) return;
+  const baseUrl = new URL(`${normalizedBase}/`);
+
+  const sourcePath = localPath.endsWith("/") ? localPath.slice(0, -1) : localPath;
+  app.use(sourcePath, async (req, res) => {
+    try {
+      const suffixWithQuery = req.originalUrl.slice(sourcePath.length) || "/";
+      const suffixUrl = new URL(suffixWithQuery, "http://proxy.local");
+      const relativePath = suffixUrl.pathname.replace(/^\/+/, "");
+      const basePath = baseUrl.pathname.replace(/\/+$/, "");
+      const joinedPath = `${basePath}/${relativePath}`.replace(/\/{2,}/g, "/");
+      const target = new URL(baseUrl.toString());
+      target.pathname = joinedPath;
+      target.search = suffixUrl.search || "";
+      const method = req.method.toUpperCase();
+      const headers = copyProxyHeaders(req.headers);
+      const body = getProxyBody(req);
+      const fetchOptions = {
+        method,
+        headers,
+        body,
+        redirect: "manual",
+      };
+      if (body === req) {
+        fetchOptions.duplex = "half";
+      }
+
+      const upstream = await fetch(target, {
+        ...fetchOptions,
+      });
+
+      const responseHeaders = {};
+      upstream.headers.forEach((value, key) => {
+        if (key.toLowerCase() === "location" && value.startsWith(normalizedBase)) {
+          responseHeaders[key] = `${sourcePath}${value.slice(normalizedBase.length)}`;
+          return;
+        }
+        const header = key.toLowerCase();
+        if (header === "transfer-encoding") return;
+        if (header === "content-encoding") return;
+        if (header === "content-length") return;
+        if (header === "connection") return;
+        responseHeaders[key] = value;
+      });
+
+      res.status(upstream.status);
+      Object.entries(responseHeaders).forEach(([key, value]) => {
+        res.setHeader(key, value);
+      });
+
+      if (!upstream.body) {
+        res.end();
+        return;
+      }
+
+      Readable.fromWeb(upstream.body).pipe(res);
+    } catch (error) {
+      res.status(502).json({
+        error: "Tool proxy unavailable",
+        detail: error?.message || "Unknown proxy error",
+      });
+    }
+  });
+}
+
+installExternalToolProxy("/bracket", BRACKET_APP_URL);
+installExternalToolProxy("/bracket-lab", BRACKET_APP_URL);
+installExternalToolProxy("/what-are-the-odds", WATO_APP_URL);
+installExternalToolProxy("/odds", WATO_APP_URL);
+
 app.use(express.static("."));
 
 function shouldRefuse(prompt) {
@@ -1071,9 +1156,6 @@ function parseBeforeOtherTeamIntent(prompt) {
 function isPlayerBeforeMvpIntent(prompt) {
   const lower = normalizePrompt(numberWordsToDigits(prompt));
   if (!/\b(mvp|most valuable player)\b/.test(lower)) return false;
-  // Mixed-event prompts like "Player wins MVP before Team/Player wins Super Bowl"
-  // must be handled by the mixed race parser.
-  if (/\b(super bowl|sb|afc|nfc|championship|title)\b/.test(lower)) return false;
   // If a team is also referenced, this is likely a mixed race prompt and
   // should be handled by the mixed parser, not player-vs-player MVP parser.
   if (extractKnownTeamTokens(prompt, 2).length > 0) return false;
@@ -1620,21 +1702,7 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
 
   const market = parseTeamMarketFromText(sideText);
   if (!market) return null;
-  let teamToken = extractKnownTeamTokens(sideText, 1)?.[0] || extractTeamName(sideText);
-  let inferredFromPlayerName = "";
-  let inferredFromPlayerTeamAbbr = "";
-  if (!teamToken) {
-    const named = await extractKnownNflNamesFromPrompt(sideText, 2);
-    const inferredName = String(named?.[0]?.name || "").trim();
-    if (inferredName) {
-      const profile = await resolveNflPlayerProfile(inferredName, "");
-      if (profile?.teamAbbr) {
-        inferredFromPlayerName = inferredName;
-        inferredFromPlayerTeamAbbr = String(profile.teamAbbr || "").trim();
-        teamToken = NFL_TEAM_DISPLAY[inferredFromPlayerTeamAbbr] || inferredFromPlayerTeamAbbr;
-      }
-    }
-  }
+  const teamToken = extractKnownTeamTokens(sideText, 1)?.[0] || extractTeamName(sideText);
   if (!teamToken) return null;
 
   const ref = await getSportsbookReferenceByTeamAndMarket(teamToken, market);
@@ -1649,21 +1717,10 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
     perSeason.push(clamp((seasonPct / 100) * Math.pow(0.96, i), 0.001, 0.8));
   }
 
-  let summaryFragment = `${shortTeamLabel(teamToken)} ${shortMarketTag(market) || teamMarketLabel(market)}`;
-  if (inferredFromPlayerName) {
-    const shortPlayer = shortNameLabel(inferredFromPlayerName);
-    if (market === "super_bowl_winner") {
-      const sbWins = knownCareerAccoladeCount(inferredFromPlayerName, "super_bowl_wins");
-      summaryFragment = sbWins >= 1 ? `${shortPlayer} another SB` : `${shortPlayer} SB`;
-    } else {
-      summaryFragment = `${shortPlayer} ${shortMarketTag(market) || teamMarketLabel(market)}`;
-    }
-  }
-
   return {
     type: "team_market",
     label: `${titleCaseWords(teamToken)} ${market.replace(/_/g, " ")}`,
-    summaryFragment,
+    summaryFragment: `${shortTeamLabel(teamToken)} ${shortMarketTag(market) || teamMarketLabel(market)}`,
     teamToken,
     market,
     seasonPct,
@@ -1672,8 +1729,6 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
     anchoredOdds: ref?.odds || null,
     asOfDate: ref?.asOfDate || asOfDate,
     book: ref?.bookmaker || "",
-    inferredFromPlayerName: inferredFromPlayerName || null,
-    inferredFromPlayerTeamAbbr: inferredFromPlayerTeamAbbr || null,
   };
 }
 
@@ -2395,27 +2450,21 @@ function sanitizeOddsResultForLog(result) {
   };
 }
 
-function resolveDataFilePath(filePathLike) {
-  const ref = String(filePathLike || "").trim();
-  if (!ref) return path.resolve(process.cwd(), "data/unknown.jsonl");
-  return path.isAbsolute(ref) ? ref : path.resolve(process.cwd(), ref);
-}
-
 async function appendFeedbackEvent(event) {
-  const filePath = resolveDataFilePath(FEEDBACK_EVENTS_FILE);
+  const filePath = path.resolve(process.cwd(), FEEDBACK_EVENTS_FILE);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.appendFile(filePath, `${JSON.stringify(event)}\n`, "utf8");
 }
 
 async function appendOddsQueryEvent(event) {
-  const filePath = resolveDataFilePath(ODDS_QUERY_EVENTS_FILE);
+  const filePath = path.resolve(process.cwd(), ODDS_QUERY_EVENTS_FILE);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.appendFile(filePath, `${JSON.stringify(event)}\n`, "utf8");
 }
 
 async function readFeedbackEvents() {
   try {
-    const filePath = resolveDataFilePath(FEEDBACK_EVENTS_FILE);
+    const filePath = path.resolve(process.cwd(), FEEDBACK_EVENTS_FILE);
     const raw = await fs.readFile(filePath, "utf8");
     return String(raw || "")
       .split(/\n+/)
@@ -2436,7 +2485,7 @@ async function readFeedbackEvents() {
 
 async function readOddsQueryEvents() {
   try {
-    const filePath = resolveDataFilePath(ODDS_QUERY_EVENTS_FILE);
+    const filePath = path.resolve(process.cwd(), ODDS_QUERY_EVENTS_FILE);
     const raw = await fs.readFile(filePath, "utf8");
     return String(raw || "")
       .split(/\n+/)
@@ -2453,61 +2502,6 @@ async function readOddsQueryEvents() {
   } catch (_error) {
     return [];
   }
-}
-
-function mergeFeedbackWithQueries(queries, feedback) {
-  const voteByRequestId = new Map();
-  for (const f of Array.isArray(feedback) ? feedback : []) {
-    const rid = String(f?.requestId || "").trim();
-    if (!rid) continue;
-    voteByRequestId.set(rid, f?.vote === "up" ? "up" : f?.vote === "down" ? "down" : "none");
-  }
-
-  return (Array.isArray(queries) ? queries : []).map((row) => {
-    const rid = String(row?.requestId || "").trim();
-    const vote = rid && voteByRequestId.has(rid) ? voteByRequestId.get(rid) : "none";
-    return {
-      ts: String(row?.ts || ""),
-      requestId: rid,
-      sessionId: String(row?.sessionId || ""),
-      prompt: String(row?.prompt || ""),
-      result: row?.result && typeof row.result === "object" ? row.result : {},
-      vote,
-    };
-  });
-}
-
-function filterFeedbackAdminRows(rows, voteFilter, q) {
-  const vf = String(voteFilter || "").trim().toLowerCase();
-  const query = String(q || "").trim().toLowerCase();
-  return (Array.isArray(rows) ? rows : []).filter((row) => {
-    if (vf && vf !== "all" && row.vote !== vf) return false;
-    if (query) {
-      const hay = `${row.prompt} ${JSON.stringify(row.result || {})}`.toLowerCase();
-      if (!hay.includes(query)) return false;
-    }
-    return true;
-  });
-}
-
-function buildFeedbackCounts(rows) {
-  let up = 0;
-  let down = 0;
-  let none = 0;
-  for (const row of Array.isArray(rows) ? rows : []) {
-    if (row.vote === "up") up += 1;
-    else if (row.vote === "down") down += 1;
-    else none += 1;
-  }
-  return { up, down, none };
-}
-
-function csvEscape(value) {
-  const s = String(value ?? "");
-  if (/[",\n\r]/.test(s)) {
-    return `"${s.replace(/"/g, '""')}"`;
-  }
-  return s;
 }
 
 async function runBootSelfTest() {
@@ -7911,17 +7905,50 @@ app.get("/api/feedback/admin", async (req, res) => {
     const voteFilter = String(req.query?.vote || "").trim().toLowerCase(); // up/down/none/all
     const q = String(req.query?.q || "").trim().toLowerCase();
     const limitRaw = Number(req.query?.limit);
-    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(50000, Math.floor(limitRaw))) : 10000;
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(2000, Math.floor(limitRaw))) : 500;
 
     const [queries, feedback] = await Promise.all([readOddsQueryEvents(), readFeedbackEvents()]);
-    const merged = mergeFeedbackWithQueries(queries, feedback);
-    const filtered = filterFeedbackAdminRows(merged, voteFilter, q);
+    const voteByRequestId = new Map();
+    for (const f of feedback) {
+      const rid = String(f?.requestId || "").trim();
+      if (!rid) continue;
+      voteByRequestId.set(rid, f?.vote === "up" ? "up" : f?.vote === "down" ? "down" : "none");
+    }
+
+    const merged = queries.map((row) => {
+      const rid = String(row?.requestId || "").trim();
+      const vote = rid && voteByRequestId.has(rid) ? voteByRequestId.get(rid) : "none";
+      return {
+        ts: String(row?.ts || ""),
+        requestId: rid,
+        sessionId: String(row?.sessionId || ""),
+        prompt: String(row?.prompt || ""),
+        result: row?.result && typeof row.result === "object" ? row.result : {},
+        vote,
+      };
+    });
+
+    const filtered = merged.filter((row) => {
+      if (voteFilter && voteFilter !== "all" && row.vote !== voteFilter) return false;
+      if (q) {
+        const hay = `${row.prompt} ${JSON.stringify(row.result || {})}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
 
     const ordered = filtered
       .sort((a, b) => new Date(b.ts || 0).getTime() - new Date(a.ts || 0).getTime())
       .slice(0, limit);
 
-    const { up, down, none } = buildFeedbackCounts(merged);
+    let up = 0;
+    let down = 0;
+    let none = 0;
+    for (const row of merged) {
+      if (row.vote === "up") up += 1;
+      else if (row.vote === "down") down += 1;
+      else none += 1;
+    }
 
     return res.json({
       status: "ok",
@@ -7930,7 +7957,6 @@ app.get("/api/feedback/admin", async (req, res) => {
       thumbsDown: down,
       noVote: none,
       count: ordered.length,
-      limitUsed: limit,
       events: ordered,
       files: {
         queries: ODDS_QUERY_EVENTS_FILE,
@@ -7939,56 +7965,6 @@ app.get("/api/feedback/admin", async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ error: error?.message || "Failed to build feedback admin data" });
-  }
-});
-
-app.get("/api/feedback/export.csv", async (req, res) => {
-  try {
-    const voteFilter = String(req.query?.vote || "all").trim().toLowerCase();
-    const q = String(req.query?.q || "").trim().toLowerCase();
-    const limitRaw = Number(req.query?.limit);
-    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200000, Math.floor(limitRaw))) : 100000;
-    const [queries, feedback] = await Promise.all([readOddsQueryEvents(), readFeedbackEvents()]);
-    const merged = mergeFeedbackWithQueries(queries, feedback);
-    const filtered = filterFeedbackAdminRows(merged, voteFilter, q)
-      .sort((a, b) => new Date(b.ts || 0).getTime() - new Date(a.ts || 0).getTime())
-      .slice(0, limit);
-
-    const header = [
-      "timestamp",
-      "vote",
-      "prompt",
-      "result_status",
-      "result_odds",
-      "result_implied_probability",
-      "result_summary",
-      "result_source_type",
-      "result_source_label",
-      "result_message",
-      "request_id",
-      "session_id",
-    ];
-    const rows = filtered.map((row) => ([
-      row.ts || "",
-      row.vote || "none",
-      row.prompt || "",
-      row.result?.status || "",
-      row.result?.odds || "",
-      row.result?.impliedProbability || "",
-      row.result?.summaryLabel || "",
-      row.result?.sourceType || "",
-      row.result?.sourceLabel || "",
-      row.result?.message || "",
-      row.requestId || "",
-      row.sessionId || "",
-    ].map(csvEscape).join(",")));
-    const csv = [header.map(csvEscape).join(","), ...rows].join("\n");
-
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", `attachment; filename="egomaniacs_feedback_export_${new Date().toISOString().slice(0, 10)}.csv"`);
-    return res.send(csv);
-  } catch (error) {
-    return res.status(500).json({ error: error?.message || "Failed to export feedback CSV" });
   }
 });
 
@@ -8002,20 +7978,21 @@ app.get("/feedback", (_req, res) => {
   <title>Egomaniacs Feedback Admin</title>
   <style>
     :root {
-      --bg: #0f0f10;
-      --panel: #18181b;
-      --border: #3b3b42;
-      --text: #f4f4f5;
-      --muted: #a1a1aa;
-      --good: #22c55e;
-      --bad: #ef4444;
-      --chip: #232327;
+      --bg: #090b10;
+      --panel: rgba(16, 18, 24, 0.84);
+      --border: rgba(255,255,255,0.08);
+      --text: #f3efe6;
+      --muted: #9e927f;
+      --good: #5bd08f;
+      --bad: #f06d6d;
+      --chip: rgba(23, 26, 34, 0.82);
+      --amber: #c8903f;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: radial-gradient(circle at 20% 10%, #2a2208 0%, var(--bg) 45%);
+      background: radial-gradient(circle at 20% 10%, #23180c 0%, var(--bg) 45%);
       color: var(--text);
     }
     .wrap {
@@ -8023,14 +8000,27 @@ app.get("/feedback", (_req, res) => {
       margin: 32px auto;
       padding: 0 16px;
     }
+    .admin-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+    }
     h1 {
-      margin: 0 0 4px;
+      margin: 0;
       font-size: 28px;
+      font-family: "Instrument Serif", serif;
+      font-weight: 400;
     }
     .sub {
-      margin: 0 0 18px;
+      margin: 0;
       color: var(--muted);
-      font-size: 14px;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-family: "Space Grotesk", sans-serif;
     }
     .cards {
       display: grid;
@@ -8039,7 +8029,7 @@ app.get("/feedback", (_req, res) => {
       margin-bottom: 16px;
     }
     .card {
-      background: linear-gradient(180deg, #1f1f23, #17171a);
+      background: linear-gradient(180deg, rgba(24,28,37,0.86), rgba(17,20,28,0.86));
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 12px;
@@ -8054,7 +8044,7 @@ app.get("/feedback", (_req, res) => {
       align-items: center;
       margin-bottom: 10px;
     }
-    select, button {
+    input, select, button {
       background: var(--chip);
       color: var(--text);
       border: 1px solid var(--border);
@@ -8068,6 +8058,7 @@ app.get("/feedback", (_req, res) => {
       border-radius: 12px;
       overflow: hidden;
       background: var(--panel);
+      backdrop-filter: blur(8px);
     }
     table {
       width: 100%;
@@ -8078,7 +8069,7 @@ app.get("/feedback", (_req, res) => {
       text-align: left;
       vertical-align: top;
       padding: 10px;
-      border-bottom: 1px solid #2b2b30;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
     }
     th { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
     tr:last-child td { border-bottom: 0; }
@@ -8089,8 +8080,8 @@ app.get("/feedback", (_req, res) => {
       font-size: 12px;
       font-weight: 700;
     }
-    .up { background: rgba(34,197,94,.15); color: var(--good); border: 1px solid rgba(34,197,94,.4); }
-    .down { background: rgba(239,68,68,.15); color: var(--bad); border: 1px solid rgba(239,68,68,.4); }
+    .up { background: rgba(91,208,143,.14); color: var(--good); border: 1px solid rgba(91,208,143,.4); }
+    .down { background: rgba(240,109,109,.14); color: var(--bad); border: 1px solid rgba(240,109,109,.4); }
     .none { background: rgba(161,161,170,.12); color: #d4d4d8; border: 1px solid rgba(161,161,170,.35); }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); }
     .small { color: var(--muted); font-size: 12px; }
@@ -8112,9 +8103,13 @@ app.get("/feedback", (_req, res) => {
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Feedback Admin</h1>
-    <p class="sub">Thumbs-up / thumbs-down feedback with prompt + returned output</p>
+  <div class="wrap admin-root">
+    <div class="admin-header">
+      <div>
+        <h1 class="admin-title">Feedback Admin</h1>
+        <p class="sub">Thumbs-up / thumbs-down feedback with prompt + returned output</p>
+      </div>
+    </div>
     <div class="cards">
       <div class="card"><div class="label">Total</div><div class="value" id="total">-</div></div>
       <div class="card"><div class="label">Thumbs Up</div><div class="value good" id="up">-</div></div>
@@ -8132,7 +8127,6 @@ app.get("/feedback", (_req, res) => {
       </select>
       <input id="searchInput" class="search" type="text" placeholder="Search prompt/output..." />
       <button id="refreshBtn">Refresh</button>
-      <button id="exportBtn">Export CSV</button>
       <span class="small" id="status">Loading...</span>
     </div>
     <div class="table-wrap">
@@ -8161,7 +8155,6 @@ app.get("/feedback", (_req, res) => {
     const voteFilterEl = document.getElementById("voteFilter");
     const searchInput = document.getElementById("searchInput");
     const refreshBtn = document.getElementById("refreshBtn");
-    const exportBtn = document.getElementById("exportBtn");
     const statusEl = document.getElementById("status");
 
     function fmtTime(iso) {
@@ -8177,7 +8170,7 @@ app.get("/feedback", (_req, res) => {
       const vote = voteFilterEl.value || "all";
       const q = String(searchInput?.value || "").trim();
       const qs = new URLSearchParams();
-      qs.set("limit", "10000");
+      qs.set("limit", "1000");
       qs.set("vote", vote);
       if (q) qs.set("q", q);
       const r = await fetch("/api/feedback/admin?" + qs.toString());
@@ -8218,15 +8211,6 @@ app.get("/feedback", (_req, res) => {
 
     refreshBtn.addEventListener("click", refresh);
     voteFilterEl.addEventListener("change", refresh);
-    exportBtn?.addEventListener("click", () => {
-      const vote = voteFilterEl.value || "all";
-      const q = String(searchInput?.value || "").trim();
-      const qs = new URLSearchParams();
-      qs.set("limit", "100000");
-      qs.set("vote", vote);
-      if (q) qs.set("q", q);
-      window.open("/api/feedback/export.csv?" + qs.toString(), "_blank");
-    });
     searchInput?.addEventListener("keydown", (e) => {
       if (e.key === "Enter") refresh();
     });
@@ -8298,8 +8282,6 @@ app.post("/api/mvp-priors/reload", async (_req, res) => {
 });
 
 app.get("/api/health", (_req, res) => {
-  const feedbackFileResolved = resolveDataFilePath(FEEDBACK_EVENTS_FILE);
-  const oddsQueryFileResolved = resolveDataFilePath(ODDS_QUERY_EVENTS_FILE);
   res.json({
     status: "ok",
     apiVersion: API_PUBLIC_VERSION,
@@ -8321,10 +8303,6 @@ app.get("/api/health", (_req, res) => {
     mvpPriorsVersion: mvpPriorsIndex?.version || null,
     mvpPriorsAsOfDate: mvpPriorsIndex?.asOfDate || null,
     feedbackFile: FEEDBACK_EVENTS_FILE,
-    feedbackFileResolved,
-    oddsQueryFile: ODDS_QUERY_EVENTS_FILE,
-    oddsQueryFileResolved,
-    persistentDataDir: PERSISTENT_DATA_DIR || null,
     feedbackUp: metrics.feedbackUp,
     feedbackDown: metrics.feedbackDown,
     oddsApiConfigured: Boolean(ODDS_API_KEY),

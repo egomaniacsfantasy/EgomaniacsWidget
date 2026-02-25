@@ -3171,6 +3171,73 @@ async function estimatePlayerAwardOdds(prompt, intent, playerName, localPlayerSt
   };
 }
 
+async function estimateMvpAndSuperBowlJointOdds(prompt, intent, playerName, teamName, localPlayerStatus, asOfDate) {
+  if (!hasMvpAndSuperBowlJointIntent(prompt)) return null;
+  if (!playerName) return null;
+
+  const isSeasonHorizon = intent?.horizon === "season" || intent?.horizon === "next_season";
+  if (!isSeasonHorizon) return null;
+
+  const resolvedTeam =
+    teamName ||
+    (localPlayerStatus?.teamAbbr ? NFL_TEAM_DISPLAY[localPlayerStatus.teamAbbr] : "") ||
+    "";
+  if (!resolvedTeam) return null;
+
+  const mvpRef = await getLiveNflMvpReferenceByWeb(`${prompt} nfl`, playerName);
+  const mvpPrior = resolveMvpSeasonPrior(playerName);
+  const mvpPctRaw =
+    parseImpliedProbabilityPct(mvpRef?.impliedProbability) ||
+    Number(mvpPrior?.impliedPct || 0) ||
+    0;
+  const sbRef = await getSportsbookReferenceByTeamAndMarket(resolvedTeam, "super_bowl_winner");
+  const sbPctRaw = parseImpliedProbabilityPct(sbRef?.impliedProbability) || 0;
+
+  if (!Number.isFinite(mvpPctRaw) || mvpPctRaw <= 0 || !Number.isFinite(sbPctRaw) || sbPctRaw <= 0) {
+    return null;
+  }
+
+  const playerPos = String(parseLocalIndexNote(localPlayerStatus?.note)?.position || "").toUpperCase();
+  const sameTeamSignal =
+    localPlayerStatus?.teamAbbr &&
+    extractNflTeamAbbr(resolvedTeam) &&
+    localPlayerStatus.teamAbbr === extractNflTeamAbbr(resolvedTeam);
+  const qbBoost = playerPos === "QB" ? 1.28 : 1.08;
+  const correlationMultiplier = sameTeamSignal ? qbBoost : 1.0;
+
+  const mvpProb = clamp(mvpPctRaw / 100, 0.0001, 0.95);
+  const sbProb = clamp(sbPctRaw / 100, 0.0001, 0.95);
+  const independent = mvpProb * sbProb;
+  let jointProb = independent * correlationMultiplier;
+  // Joint event must still be <= each single leg.
+  jointProb = Math.min(jointProb, Math.min(mvpProb, sbProb) * 0.98);
+  const jointPct = clamp(jointProb * 100, 0.01, 95);
+
+  return {
+    status: "ok",
+    odds: toAmericanOdds(jointPct),
+    impliedProbability: `${jointPct.toFixed(1)}%`,
+    confidence: "High",
+    assumptions: [
+      "Joint model combines season MVP and Super Bowl legs with positive correlation for same-team outcomes.",
+      `MVP leg ${mvpPctRaw.toFixed(1)}% and Super Bowl leg ${sbPctRaw.toFixed(1)}% feed the combined estimate.`,
+    ],
+    playerName,
+    headshotUrl: null,
+    summaryLabel: `${playerName} wins MVP and ${resolvedTeam} win Super Bowl`,
+    liveChecked: Boolean(mvpRef || sbRef),
+    asOfDate: asOfDate || new Date().toISOString().slice(0, 10),
+    sourceType: "hybrid_anchored",
+    sourceLabel: "Joint model anchored to season MVP and Super Bowl baselines",
+    trace: {
+      market: "mvp_and_super_bowl",
+      mvpPct: Number(mvpPctRaw.toFixed(2)),
+      teamSuperBowlPct: Number(sbPctRaw.toFixed(2)),
+      correlationMultiplier: Number(correlationMultiplier.toFixed(3)),
+    },
+  };
+}
+
 function extractTdIntent(prompt) {
   const lower = normalizePrompt(prompt);
   const match = lower.match(/\b(\d{1,2})\s+(?:(receiving|rushing|passing)\s+)?(td|tds|touchdown|touchdowns)\b/);
@@ -7290,6 +7357,34 @@ app.post("/api/odds", async (req, res) => {
             "",
             {
               preferredTeamAbbr: localPlayerStatus?.teamAbbr || "",
+              preferActive: localPlayerStatus?.status === "active",
+            }
+          );
+          oddsCache.set(normalizedPrompt, { ts: Date.now(), value });
+          semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value });
+          metrics.baselineServed += 1;
+          return res.json(value);
+        }
+      }
+
+      if (jointEventIntent && hasMvpAndSuperBowlJointIntent(promptForParsing) && playerHint) {
+        const jointTeam = teamHint || extractTeamName(promptForParsing) || "";
+        const jointEstimate = await estimateMvpAndSuperBowlJointOdds(
+          promptForParsing,
+          intent,
+          resolvedPlayerHint || playerHint,
+          jointTeam,
+          localPlayerStatus,
+          liveContext?.asOfDate || today
+        );
+        if (jointEstimate) {
+          const value = await enrichEntityMedia(
+            promptForParsing,
+            jointEstimate,
+            resolvedPlayerHint || playerHint,
+            jointTeam,
+            {
+              preferredTeamAbbr: localPlayerStatus?.teamAbbr || extractNflTeamAbbr(jointTeam) || "",
               preferActive: localPlayerStatus?.status === "active",
             }
           );

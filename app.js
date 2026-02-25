@@ -24,6 +24,7 @@ const headshotProfilePop = document.getElementById("headshot-profile-pop");
 const headshotProfileLogo = document.getElementById("headshot-profile-logo");
 const headshotProfileName = document.getElementById("headshot-profile-name");
 const headshotProfileMeta = document.getElementById("headshot-profile-meta");
+const queryEcho = document.getElementById("query-echo");
 const promptSummary = document.getElementById("prompt-summary");
 const shareBtn = document.getElementById("share-btn");
 const copyBtn = document.getElementById("copy-btn");
@@ -687,6 +688,7 @@ function showResult(result, prompt) {
   const oddsMode = renderOddsDisplay(result.odds);
   applyResultCardState(oddsMode);
   probabilityOutput.textContent = result.impliedProbability;
+  if (queryEcho) queryEcho.textContent = normalizePrompt(prompt);
   const displaySummary = getDisplaySummaryLabel(result.summaryLabel, prompt, result);
   promptSummary.textContent = displaySummary;
   applyPromptSummarySizing(displaySummary);

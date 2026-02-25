@@ -5309,6 +5309,14 @@ function hasJointEventScenario(prompt) {
   return /\b(and|both)\b/.test(lower) && /\b(win|wins|make|makes|reach|reaches|mvp|playoffs?|championship)\b/.test(lower);
 }
 
+function hasMvpAndSuperBowlJointIntent(prompt) {
+  const lower = normalizePrompt(prompt);
+  if (!/\b(and|both)\b/.test(lower)) return false;
+  const hasMvp = /\b(mvp|most valuable player)\b/.test(lower);
+  const hasSuperBowl = /\b(super bowl|sb)\b/.test(lower);
+  return hasMvp && hasSuperBowl;
+}
+
 function awardRoleNoChance(prompt, localPlayerStatus) {
   const lower = normalizePrompt(prompt);
   const asksAward = /\b(mvp|offensive player of the year|defensive player of the year|opoy|dpoy)\b/.test(lower);
@@ -6642,6 +6650,16 @@ function applyConsistencyAndTrack(args) {
 function decorateForScenarioComplexity(value, conditionalIntent, jointEventIntent) {
   if (!value || value.status !== "ok") return value;
   if (!conditionalIntent && !jointEventIntent) return value;
+  let impliedPct = parseImpliedProbabilityPct(value.impliedProbability);
+  if (jointEventIntent && Number.isFinite(impliedPct)) {
+    // Joint events must be less likely than their single-leg counterparts.
+    const adjusted = clamp(impliedPct * 0.62, 0.01, 99.9);
+    value = {
+      ...value,
+      impliedProbability: `${adjusted.toFixed(1)}%`,
+      odds: toAmericanOdds(adjusted),
+    };
+  }
   const assumptions = Array.isArray(value.assumptions) ? [...value.assumptions] : [];
   assumptions.unshift(
     conditionalIntent
@@ -7282,7 +7300,11 @@ app.post("/api/odds", async (req, res) => {
         }
       }
 
-      if (playerHint && /\b(mvp|most valuable player|offensive player of the year|defensive player of the year|opoy|dpoy)\b/i.test(promptForParsing)) {
+      if (
+        !jointEventIntent &&
+        playerHint &&
+        /\b(mvp|most valuable player|offensive player of the year|defensive player of the year|opoy|dpoy)\b/i.test(promptForParsing)
+      ) {
         const awardEstimate = await estimatePlayerAwardOdds(
           promptForParsing,
           intent,

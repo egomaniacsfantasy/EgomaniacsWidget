@@ -221,6 +221,8 @@ body {
 
 .prompt-container {
   position: relative;
+  display: flex;
+  align-items: center;
   background: var(--bg-surface);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-lg);
@@ -249,12 +251,15 @@ body {
   min-height: 78px;
   padding: 0 var(--space-6);
   padding-right: 188px;
-  line-height: 78px;
+  line-height: 1;
   caret-color: var(--amber);
   display: block;
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
+  margin: 0;
+  align-self: center;
+  transform: translateY(-1px);
 }
 
 .prompt-input::placeholder {
@@ -1062,8 +1067,9 @@ body {
     padding-right: 136px;
     padding-top: 0;
     padding-bottom: 0;
-    line-height: 74px;
+    line-height: 1;
     font-size: 20px;
+    transform: translateY(-1px);
   }
 
   .prompt-submit {

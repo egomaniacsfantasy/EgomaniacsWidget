@@ -104,8 +104,22 @@ body {
   gap: 18px;
 }
 
-.og-wordmark {
+.brand-lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   text-decoration: none;
+}
+
+.brand-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  display: block;
+  flex-shrink: 0;
+}
+
+.og-wordmark {
   font-family: var(--font-serif);
   color: var(--text-primary);
   letter-spacing: 0.12em;
@@ -124,24 +138,37 @@ body {
   gap: 14px;
 }
 
-.og-links a {
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   text-decoration: none;
   color: var(--text-secondary);
   font-size: 0.92rem;
 }
 
-.og-links a:hover {
+.nav-link:hover {
   color: var(--text-primary);
 }
 
-.og-links a.is-active {
+.nav-link.is-active {
   color: var(--text-amber);
 }
 
-.btn.btn-launch {
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 6px 12px;
+.beta-badge {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: rgba(184, 125, 24, 0.9);
+  border: 1px solid rgba(184, 125, 24, 0.35);
+  border-radius: 3px;
+  padding: 1px 5px 2px;
+  line-height: 1.2;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+  flex-shrink: 0;
 }
 
 .wato-root {

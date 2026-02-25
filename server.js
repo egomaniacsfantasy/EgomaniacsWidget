@@ -46,6 +46,7 @@ const ACCOLADES_INDEX_FILE = process.env.ACCOLADES_INDEX_FILE || "data/accolades
 const MVP_PRIORS_FILE = process.env.MVP_PRIORS_FILE || "data/mvp_odds_2026_27_fanduel.json";
 const FEEDBACK_EVENTS_FILE = process.env.FEEDBACK_EVENTS_FILE || "data/feedback_events.jsonl";
 const ODDS_QUERY_EVENTS_FILE = process.env.ODDS_QUERY_EVENTS_FILE || "data/odds_query_events.jsonl";
+const WATO_INDEX_PATH = path.resolve("what-are-the-odds/index.html");
 const FEATURE_ENABLE_TRACE = String(process.env.FEATURE_ENABLE_TRACE || "true") === "true";
 const STRICT_BOOT_SELFTEST = String(process.env.STRICT_BOOT_SELFTEST || "false") === "true";
 const execFileAsync = promisify(execFile);
@@ -506,16 +507,20 @@ function installExternalToolProxy(localPath, externalBase) {
 
 installExternalToolProxy("/bracket", BRACKET_APP_URL);
 installExternalToolProxy("/bracket-lab", BRACKET_APP_URL);
-// Keep WATO local-first to avoid accidental redirects/proxy loops.
-if (String(process.env.WATO_FORCE_PROXY || "").trim() === "1") {
-  installExternalToolProxy("/what-are-the-odds", WATO_APP_URL);
-  installExternalToolProxy("/odds", WATO_APP_URL);
-}
-
+// Serve What Are the Odds locally to prevent redirect/proxy loops.
+app.get("/", (_req, res) => {
+  res.sendFile(WATO_INDEX_PATH);
+});
 app.get("/what-are-the-odds", (_req, res) => {
   res.redirect(302, "/what-are-the-odds/");
 });
+app.get("/what-are-the-odds/", (_req, res) => {
+  res.sendFile(WATO_INDEX_PATH);
+});
 app.get("/odds", (_req, res) => {
+  res.redirect(302, "/what-are-the-odds/");
+});
+app.get("/odds/", (_req, res) => {
   res.redirect(302, "/what-are-the-odds/");
 });
 

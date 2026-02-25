@@ -5468,12 +5468,16 @@ function extractPlayerName(prompt) {
   const raw = String(prompt || "");
   const tokens = normalizeEntityName(raw).split(" ").filter(Boolean);
   const titleCase = (s) => s.split(" ").map((w) => (w ? `${w[0].toUpperCase()}${w.slice(1)}` : w)).join(" ");
+  const hasDigits = (s) => /\d/.test(String(s || ""));
+  const looksLikeTeamRecordPhrase = (s) =>
+    /\b(go(?:es|ing)?|finish(?:es|ed|ing)?|end(?:s|ed|ing)?)\s+\d{1,2}\s*-\s*\d{1,2}\b/i.test(String(s || ""));
 
   // First pass: try to resolve known players using longer n-grams first.
   for (let n = Math.min(5, tokens.length); n >= 2; n -= 1) {
     for (let i = 0; i <= tokens.length - n; i += 1) {
       const phrase = tokens.slice(i, i + n).join(" ");
       if (!phrase) continue;
+      if (hasDigits(phrase) || looksLikeTeamRecordPhrase(phrase)) continue;
       if (INVALID_PERSON_PHRASES.has(phrase)) continue;
       if (COMMON_NON_NAME_PHRASES.has(phrase)) continue;
       if (KNOWN_TEAMS.some((t) => normalizeEntityName(t) === phrase)) continue;
@@ -5492,6 +5496,7 @@ function extractPlayerName(prompt) {
   for (let i = 0; i <= tokens.length - 2; i += 1) {
     const phrase = tokens.slice(i, i + 2).join(" ");
     if (!phrase) continue;
+    if (hasDigits(phrase) || looksLikeTeamRecordPhrase(phrase)) continue;
     if (INVALID_PERSON_PHRASES.has(phrase)) continue;
     if (COMMON_NON_NAME_PHRASES.has(phrase)) continue;
     if (KNOWN_TEAMS.some((t) => normalizeEntityName(t) === phrase)) continue;
@@ -5506,6 +5511,9 @@ function extractPlayerNamesFromPrompt(prompt, maxNames = 3) {
   const raw = String(prompt || "");
   const tokens = normalizeEntityName(raw).split(" ").filter(Boolean);
   const titleCase = (s) => s.split(" ").map((w) => (w ? `${w[0].toUpperCase()}${w.slice(1)}` : w)).join(" ");
+  const hasDigits = (s) => /\d/.test(String(s || ""));
+  const looksLikeTeamRecordPhrase = (s) =>
+    /\b(go(?:es|ing)?|finish(?:es|ed|ing)?|end(?:s|ed|ing)?)\s+\d{1,2}\s*-\s*\d{1,2}\b/i.test(String(s || ""));
   const out = [];
   const seen = new Set();
 
@@ -5513,6 +5521,7 @@ function extractPlayerNamesFromPrompt(prompt, maxNames = 3) {
     for (let i = 0; i <= tokens.length - n; i += 1) {
       const phrase = tokens.slice(i, i + n).join(" ");
       if (!phrase) continue;
+      if (hasDigits(phrase) || looksLikeTeamRecordPhrase(phrase)) continue;
       if (INVALID_PERSON_PHRASES.has(phrase)) continue;
       if (COMMON_NON_NAME_PHRASES.has(phrase)) continue;
       if (KNOWN_TEAMS.some((t) => normalizeEntityName(t) === phrase)) continue;
@@ -5537,6 +5546,7 @@ function extractPlayerNamesFromPrompt(prompt, maxNames = 3) {
     for (let i = 0; i <= tokens.length - 2; i += 1) {
       const phrase = tokens.slice(i, i + 2).join(" ");
       if (!phrase) continue;
+      if (hasDigits(phrase) || looksLikeTeamRecordPhrase(phrase)) continue;
       if (INVALID_PERSON_PHRASES.has(phrase)) continue;
       if (COMMON_NON_NAME_PHRASES.has(phrase)) continue;
       if (KNOWN_TEAMS.some((t) => normalizeEntityName(t) === phrase)) continue;

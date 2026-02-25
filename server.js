@@ -27,7 +27,7 @@ const ODDS_API_BASE = process.env.ODDS_API_BASE || "https://api.the-odds-api.com
 const ODDS_API_REGIONS = process.env.ODDS_API_REGIONS || "us";
 const ODDS_API_BOOKMAKERS = process.env.ODDS_API_BOOKMAKERS || "draftkings,fanduel";
 const CACHE_VERSION = "v43";
-const API_PUBLIC_VERSION = "2026.02.23.12";
+const API_PUBLIC_VERSION = "2026.02.25.2";
 const DEFAULT_NFL_SEASON = "2026-27";
 const oddsCache = new Map();
 const PLAYER_STATUS_TIMEOUT_MS = Number(process.env.PLAYER_STATUS_TIMEOUT_MS || 7000);
@@ -939,6 +939,10 @@ function applyDefaultNflSeasonInterpretation(prompt) {
   if (!hasNflContext(text) && !statLike) return text;
   if (/\b(hall of fame|hof)\b/i.test(text)) return text;
   if (/\b(ever|career|all[- ]time)\b/i.test(text)) return text;
+  if (/\b(retire|retires|retired|retirement)\b/i.test(text)) return text;
+  if (/\b(win|wins|won)\s+\d+\s*(mvp|most valuable player|super bowls?|championships?|titles?|rings?)\b/i.test(text)) return text;
+  if (/\b(win|wins|won)\s+(?:a|an|his|her|their)?\s*(second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(mvp|most valuable player|super bowls?|championships?|titles?|rings?)\b/i.test(text)) return text;
+  if (/\bbefore\b/i.test(text) && /\b(super bowl|mvp|championship|title|ring)\b/i.test(text)) return text;
   if (hasExplicitSeasonYear(text)) return text;
 
   // Product rule: between seasons, "this year" and "next year" both reference upcoming NFL season.
@@ -2856,12 +2860,12 @@ async function estimateCareerSuperBowlOdds(prompt, playerName, localPlayerStatus
 function parseMvpIntent(prompt) {
   const lower = normalizePrompt(numberWordsToDigits(prompt));
   if (!/\b(mvp|most valuable player)\b/.test(lower)) return null;
-  const m = lower.match(/\b(win|wins|won|to win)\s+(?:exactly\s+)?(\d+)\s+(mvp|most valuable player)s?\b/);
+  const m = lower.match(/\b(win|wins|won|to win)\s+(?:exactly\s+)?(\d+)\s*(mvp|most valuable player)s?\b/);
   const count = m ? Number(m[2]) : 1;
   if (!Number.isFinite(count) || count < 1 || count > 8) return null;
   const exactBefore = new RegExp(`\\b(win|wins|won|to win)\\s+exactly\\s+${count}\\s+(mvp|most valuable player)s?\\b`, "i").test(lower)
-    || new RegExp(`\\bexactly\\s+${count}\\s+(mvp|most valuable player)s?\\b`, "i").test(lower);
-  const exactAfter = new RegExp(`\\b(win|wins|won)\\s+${count}\\s+(mvp|most valuable player)s?\\s+exactly\\b`, "i").test(lower);
+    || new RegExp(`\\bexactly\\s+${count}\\s*(mvp|most valuable player)s?\\b`, "i").test(lower);
+  const exactAfter = new RegExp(`\\b(win|wins|won)\\s+${count}\\s*(mvp|most valuable player)s?\\s+exactly\\b`, "i").test(lower);
   const exact = Boolean(exactBefore || exactAfter);
   return { count, exact };
 }
@@ -2921,8 +2925,11 @@ async function estimatePlayerMvpOdds(prompt, intent, playerName, localPlayerStat
   const mvpIntent = parseMvpIntent(prompt);
   if (!mvpIntent || !playerName || !localPlayerStatus) return null;
   const isSeasonHorizon = intent?.horizon === "season" || intent?.horizon === "next_season";
+  const explicitSeasonMarker = /\b(this season|next season|upcoming season|in \d{4}|20\d{2})\b/i.test(String(prompt || ""));
   const seasonLikePrompt = /\b(this season|next season|season|20\d{2})\b/i.test(String(prompt || ""));
-  const treatAsSeasonMvp = isSeasonHorizon || seasonLikePrompt;
+  const treatAsSeasonMvp =
+    (isSeasonHorizon || seasonLikePrompt) &&
+    !(mvpIntent.count >= 2 && !explicitSeasonMarker);
   const existingMvpWins = knownCareerAccoladeCount(playerName, "mvp_wins");
   const resolvedMvp = isSeasonHorizon
     ? {
@@ -5415,17 +5422,43 @@ function singularizeAchievement(noun) {
 }
 
 function parseMultiAchievementIntent(prompt) {
-  const match = String(prompt || "").match(
+  const text = String(prompt || "");
+  const numericMatch = text.match(
     /\b(win|wins|won)\s+(\d+)\s+(super bowls?|mvps?|championships?|titles?|rings?)\b/i
   );
-  if (!match) return null;
-  const count = Number(match[2]);
+  if (numericMatch) {
+    const count = Number(numericMatch[2]);
+    if (!Number.isFinite(count) || count < 2) return null;
+    return {
+      count,
+      phrase: numericMatch[0],
+      verb: numericMatch[1],
+      noun: numericMatch[3],
+    };
+  }
+  const ordinalMap = {
+    second: 2,
+    third: 3,
+    fourth: 4,
+    fifth: 5,
+    sixth: 6,
+    seventh: 7,
+    eighth: 8,
+    ninth: 9,
+    tenth: 10,
+  };
+  const ordinalMatch = text.match(
+    /\b(win|wins|won)\s+(?:a|an|his|her|their)?\s*(second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(super bowls?|mvps?|championships?|titles?|rings?)\b/i
+  );
+  if (!ordinalMatch) return null;
+  const ordinalWord = String(ordinalMatch[2] || "").toLowerCase();
+  const count = Number(ordinalMap[ordinalWord]);
   if (!Number.isFinite(count) || count < 2) return null;
   return {
     count,
-    phrase: match[0],
-    verb: match[1],
-    noun: match[3],
+    phrase: ordinalMatch[0],
+    verb: ordinalMatch[1],
+    noun: ordinalMatch[3],
   };
 }
 

@@ -690,6 +690,46 @@ function buildRondaleMooreRefusalResponse() {
   };
 }
 
+function hasMixedNonsenseTail(prompt) {
+  const text = normalizePrompt(prompt);
+  if (!text) return false;
+  if (!hasMeasurableOutcomeIntent(text)) return false;
+
+  // Only run this check when the user clearly chains extra clauses.
+  const connectorRe = /\b(and then|then|after that|afterwards|plus also|plus)\b/i;
+  if (!connectorRe.test(text)) return false;
+
+  const parts = text
+    .split(/\b(?:and then|then|after that|afterwards|plus also|plus)\b/i)
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
+  if (parts.length < 2) return false;
+
+  const isTemporalOnly = (clause) =>
+    /^(?:this|next)\s+(?:season|year)$|^(?:before|by|through)\s+20\d{2}$/i.test(String(clause || "").trim());
+
+  for (let i = 1; i < parts.length; i += 1) {
+    const clause = parts[i];
+    if (!clause) continue;
+    if (isTemporalOnly(clause)) continue;
+    if (hasStrongSportsContext(clause) || hasMeasurableOutcomeIntent(clause)) continue;
+
+    const words = (clause.match(/[a-z]+/gi) || []).length;
+    if (words >= 3) return true;
+  }
+
+  return false;
+}
+
+function buildMixedNonsenseTailResponse() {
+  return {
+    status: "snark",
+    title: "One Scenario At A Time.",
+    message: "That prompt mixes a sports scenario with unrelated text, so I’m not pricing it.",
+    hint: "Keep it to one clean NFL outcome and I’ll give you odds.",
+  };
+}
+
 function shouldAllowLlmLastResort(prompt, context = {}) {
   const lower = normalizePrompt(prompt);
   if (!hasMeasurableOutcomeIntent(prompt)) return false;
@@ -6695,6 +6735,11 @@ app.post("/api/odds", async (req, res) => {
     if (hasRondaleMoorePrompt(promptForParsing)) {
       metrics.snarks += 1;
       return res.json(buildRondaleMooreRefusalResponse());
+    }
+
+    if (hasMixedNonsenseTail(promptForParsing)) {
+      metrics.snarks += 1;
+      return res.json(buildMixedNonsenseTailResponse());
     }
 
     if (shouldRefuse(promptForParsing)) {

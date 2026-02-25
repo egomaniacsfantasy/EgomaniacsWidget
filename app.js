@@ -30,11 +30,13 @@ const shareBtn = document.getElementById("share-btn");
 const copyBtn = document.getElementById("copy-btn");
 const statusLine = document.getElementById("status-line");
 const examplesWrap = document.querySelector(".examples");
-const shareCard = document.getElementById("share-card");
-const shareOddsOutput = document.getElementById("share-odds-output");
-const shareSummaryOutput = document.getElementById("share-summary-output");
-const shareProbabilityOutput = document.getElementById("share-probability-output");
-const shareSourceOutput = document.getElementById("share-source-output");
+const shareModalOverlay = document.getElementById("share-modal-overlay");
+const shareXBtn = document.getElementById("share-x-btn");
+const shareIgBtn = document.getElementById("share-ig-btn");
+const shareCopyImageBtn = document.getElementById("share-copy-image-btn");
+const shareDownloadBtn = document.getElementById("share-download-btn");
+const shareCancelBtn = document.getElementById("share-cancel-btn");
+const shareToast = document.getElementById("share-toast");
 const hofWarning = document.getElementById("hof-warning");
 const rationalePanel = document.getElementById("rationale-panel");
 const rationaleList = document.getElementById("rationale-list");
@@ -77,6 +79,7 @@ let exampleTimer = null;
 let feedbackContext = null;
 let primaryPlayerInfo = null;
 let secondaryPlayerInfo = null;
+let latestShareData = null;
 let allowFeedbackForCurrentResult = false;
 let profileHideTimer = null;
 let flipTipSeen = false;
@@ -590,25 +593,8 @@ function toggleHallOfFameWarning(show) {
   hofWarning.classList.toggle("hidden", !show);
 }
 
-function formatOddsForShare(oddsText) {
-  const n = parseAmericanOdds(oddsText);
-  if (n !== null && n <= -10000) return "IT'S A LOCK!";
-  if (n !== null && n >= 10000) return "NO SHOT.";
-  return String(oddsText || "");
-}
-
 function syncShareCard(result, prompt) {
-  shareOddsOutput.textContent = formatOddsForShare(result.odds);
-  shareSummaryOutput.textContent = getDisplaySummaryLabel(result.summaryLabel, prompt, result);
-  shareProbabilityOutput.textContent = result.impliedProbability || "";
-
-  if (result.sourceType === "sportsbook" && result.sourceBook) {
-    shareSourceOutput.textContent = `${result.sourceBook} reference`;
-  } else if (result.liveChecked) {
-    shareSourceOutput.textContent = "Live context checked";
-  } else {
-    shareSourceOutput.textContent = "Hypothetical model";
-  }
+  latestShareData = buildShareData(result, prompt);
 }
 
 function normalizeSummaryText(text) {
@@ -778,6 +764,7 @@ function showResult(result, prompt) {
 function showRefusal(message, options = {}) {
   resultCard.classList.add("hidden");
   refusalCard.classList.remove("hidden");
+  latestShareData = null;
   resultTypeLabel.textContent = "Estimated Odds";
   clearHeadshot();
   clearSourceLine();
@@ -798,6 +785,7 @@ function showRefusal(message, options = {}) {
 function showSystemError(message) {
   resultCard.classList.add("hidden");
   refusalCard.classList.add("hidden");
+  latestShareData = null;
   clearHeadshot();
   clearSourceLine();
   clearFreshness();
@@ -939,8 +927,36 @@ async function copyCurrentResult() {
   }
 }
 
-async function createShareBlob() {
-  const shareData = getCurrentShareData();
+function showShareToast(message) {
+  if (!shareToast) return;
+  shareToast.textContent = String(message || "");
+  shareToast.classList.remove("hidden");
+  setTimeout(() => {
+    shareToast.classList.add("hidden");
+  }, 1800);
+}
+
+function slugifyShare(str) {
+  return String(str || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\+/g, "plus")
+    .replace(/-/g, "minus")
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "");
+}
+
+function openShareModal() {
+  if (!shareModalOverlay) return;
+  shareModalOverlay.classList.remove("hidden");
+}
+
+function closeShareModal() {
+  if (!shareModalOverlay) return;
+  shareModalOverlay.classList.add("hidden");
+}
+
+async function createShareBlob(shareData, type = "image/jpeg", quality = 0.95) {
   const canvas = await generateShareCard(shareData);
   return await new Promise((resolve, reject) => {
     canvas.toBlob(
@@ -948,55 +964,88 @@ async function createShareBlob() {
         if (blob) resolve(blob);
         else reject(new Error("Could not build image."));
       },
-      "image/jpeg",
-      0.95
+      type,
+      quality
     );
   });
 }
 
-async function shareCurrentResult() {
-  if (resultCard.classList.contains("hidden")) return;
+function downloadShareBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1200);
+}
 
-  const oldText = shareBtn.textContent;
-  shareBtn.disabled = true;
-  shareBtn.textContent = "Preparing...";
+function buildTweetText(shareData) {
+  return (
+    `Odds Gods says ${shareData.oddsStr} — ${shareData.query}.\n\n` +
+    `Somebody tell me I'm wrong.\n\noddsgods.net`
+  );
+}
+
+async function handleShareTwitter() {
+  if (!latestShareData) return;
   try {
-    const blob = await createShareBlob();
-    const oddsSlug = String(oddsOutput.textContent || "")
-      .trim()
-      .toLowerCase()
-      .replace(/\+/g, "plus")
-      .replace(/-/g, "minus")
-      .replace(/\s+/g, "-")
-      .replace(/[^a-z0-9-]/g, "");
-    const filename = `odds-gods-${oddsSlug || "estimate"}.jpg`;
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-
-    const query = normalizeSummaryText(queryEcho?.textContent || scenarioInput.value || "");
-    const tweetText =
-      `Odds Gods says ${String(oddsOutput.textContent || "").trim()} — ${query}.\n\n` +
-      `Somebody tell me I'm wrong.\n\noddsgods.com/odds`;
+    const blob = await createShareBlob(latestShareData, "image/jpeg", 0.95);
+    const filename = `odds-gods-${slugifyShare(latestShareData.oddsStr)}.jpg`;
+    downloadShareBlob(blob, filename);
     setTimeout(() => {
-      window.open(
-        `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweetText)}`,
-        "_blank",
-        "noopener,noreferrer"
-      );
-    }, 400);
+      const text = buildTweetText(latestShareData);
+      window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`, "_blank", "noopener,noreferrer");
+    }, 300);
     statusLine.textContent = "Share image downloaded.";
   } catch (_error) {
     statusLine.textContent = "Could not generate share image right now.";
   } finally {
-    shareBtn.disabled = false;
-    shareBtn.textContent = oldText;
+    closeShareModal();
   }
+}
+
+async function handleCopyImage() {
+  if (!latestShareData) return;
+  try {
+    const blob = await createShareBlob(latestShareData, "image/png", 1);
+    if (navigator.clipboard && typeof window.ClipboardItem !== "undefined") {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      showShareToast("Image copied");
+    } else {
+      showShareToast("Copy not supported in this browser");
+    }
+  } catch (_error) {
+    showShareToast("Copy not supported in this browser");
+  } finally {
+    closeShareModal();
+  }
+}
+
+async function handleDownloadShare() {
+  if (!latestShareData) return;
+  try {
+    const blob = await createShareBlob(latestShareData, "image/jpeg", 0.95);
+    const filename = `odds-gods-${slugifyShare(latestShareData.oddsStr)}.jpg`;
+    downloadShareBlob(blob, filename);
+    statusLine.textContent = "Share image downloaded.";
+  } catch (_error) {
+    statusLine.textContent = "Could not generate share image right now.";
+  } finally {
+    closeShareModal();
+  }
+}
+
+async function handleShareInstagram() {
+  await handleDownloadShare();
+  showShareToast("Image saved — open Instagram and share from your camera roll");
+}
+
+function shareCurrentResult() {
+  if (resultCard.classList.contains("hidden")) return;
+  latestShareData = latestShareData || getCurrentShareData();
+  openShareModal();
 }
 
 function hashQuery(text) {
@@ -1070,13 +1119,40 @@ function getCurrentShareData() {
   const query = normalizeSummaryText(queryEcho?.textContent || scenarioInput.value || "");
   const oddsStr = String(oddsOutput.textContent || "").trim();
   const impliedStr = String(probabilityOutput.textContent || "").trim();
-  const entityLabel = normalizeSummaryText(promptSummary.textContent || query || "");
   const primaryCluster = document.querySelector("#entity-strip img.entity-avatar");
-  const primaryHeadshot =
+  const entityImageUrl =
     (primaryCluster && primaryCluster.getAttribute("src")) ||
     playerHeadshot?.getAttribute("src") ||
     null;
-  return { query, oddsStr, impliedStr, entityLabel, playerHeadshotUrl: primaryHeadshot };
+  return {
+    query,
+    oddsStr,
+    impliedStr,
+    entityImageUrl,
+    logoPath: "/logo-icon.png",
+  };
+}
+
+function buildShareData(result, prompt) {
+  const query = normalizeSummaryText(prompt || queryEcho?.textContent || scenarioInput.value || "");
+  const oddsStr = String(result?.odds || oddsOutput.textContent || "").trim();
+  const impliedStr = String(result?.impliedProbability || probabilityOutput.textContent || "").trim();
+  const firstEntityImage =
+    (Array.isArray(result?.entityAssets) && result.entityAssets.length
+      ? String(result.entityAssets[0]?.imageUrl || "").trim()
+      : "") || "";
+  const entityImageUrl =
+    firstEntityImage ||
+    String(result?.headshotUrl || "").trim() ||
+    String(playerHeadshot?.getAttribute("src") || "").trim() ||
+    null;
+  return {
+    query,
+    oddsStr,
+    impliedStr,
+    entityImageUrl,
+    logoPath: "/logo-icon.png",
+  };
 }
 
 function loadImage(src) {
@@ -1110,11 +1186,12 @@ function genBolt(bRng, x1, y1, x2, y2, disp, depth) {
   return [...left, ...right.slice(1)];
 }
 
-async function generateShareCard({ query, oddsStr, impliedStr, entityLabel, playerHeadshotUrl }) {
-  const SIZE = 1200;
+async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, logoPath }) {
+  const WIDTH = 1200;
+  const HEIGHT = 900;
   const canvas = document.createElement("canvas");
-  canvas.width = SIZE;
-  canvas.height = SIZE;
+  canvas.width = WIDTH;
+  canvas.height = HEIGHT;
   const ctx = canvas.getContext("2d");
   const normalizedQuery = normalizeSummaryText(query || "What Are the Odds?");
   const queryHash = hashQuery(normalizedQuery);
@@ -1122,44 +1199,37 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityLabel, play
   const boltRng = seededRng(queryHash * 99991);
 
   let logoImg = null;
-  let playerImg = null;
+  let entityImg = null;
   try {
-    logoImg = await loadImage("/logo-icon.png");
+    logoImg = await loadImage(logoPath || "/logo-icon.png");
   } catch (_error) {
     logoImg = null;
   }
-  if (playerHeadshotUrl) {
+  if (entityImageUrl) {
     try {
-      playerImg = await loadImage(playerHeadshotUrl);
+      entityImg = await loadImage(entityImageUrl);
     } catch (_error) {
-      playerImg = null;
+      entityImg = null;
     }
   }
 
-  // Rounded-corner clip region.
-  ctx.fillStyle = "#090805";
-  ctx.fillRect(0, 0, SIZE, SIZE);
-  ctx.save();
-  roundRectPath(ctx, 8, 8, SIZE - 16, SIZE - 16, 38);
-  ctx.clip();
-
   // Layer 1.
   ctx.fillStyle = "#0e0c09";
-  ctx.fillRect(0, 0, SIZE, SIZE);
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
   // Layer 2.
-  const g1 = ctx.createRadialGradient(600, 1340, 0, 600, 1340, 820);
-  g1.addColorStop(0, "rgba(139,90,18,0.58)");
+  const g1 = ctx.createRadialGradient(600, 1020, 0, 600, 1020, 760);
+  g1.addColorStop(0, "rgba(139,90,18,0.60)");
   g1.addColorStop(0.5, "rgba(139,90,18,0.20)");
   g1.addColorStop(1, "rgba(139,90,18,0)");
   ctx.fillStyle = g1;
-  ctx.fillRect(0, 0, SIZE, SIZE);
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-  const g2 = ctx.createRadialGradient(1120, 60, 0, 1120, 60, 440);
-  g2.addColorStop(0, "rgba(110,70,12,0.34)");
+  const g2 = ctx.createRadialGradient(1100, 50, 0, 1100, 50, 400);
+  g2.addColorStop(0, "rgba(110,70,12,0.36)");
   g2.addColorStop(1, "rgba(110,70,12,0)");
   ctx.fillStyle = g2;
-  ctx.fillRect(0, 0, SIZE, SIZE);
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
   // Layer 3.
   const FRAGS = [
@@ -1176,15 +1246,15 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityLabel, play
   ]);
   const placed = [];
   let count = 0;
-  while (count < 108) {
+  while (count < 95) {
     const txt = FRAGS[Math.floor(rng() * FRAGS.length)];
     const serif = SERIF_FRAGS.has(txt) || /[ΣΔμσπΩβλφ]/.test(txt);
-    const size = serif ? 18 + Math.floor(rng() * 14) : 14 + Math.floor(rng() * 12);
+    const size = serif ? 16 + Math.floor(rng() * 12) : 13 + Math.floor(rng() * 10);
     ctx.font = serif ? `400 ${size}px "Instrument Serif",serif` : `400 ${size}px "Space Grotesk",monospace`;
     const tw = ctx.measureText(txt).width;
     const th = size * 1.3;
-    const x = rng() * (SIZE - tw - 20) + 10;
-    const y = rng() * (SIZE - th - 20) + 10;
+    const x = rng() * (WIDTH - tw - 20) + 10;
+    const y = rng() * (HEIGHT - th - 20) + 10;
     const r0 = [x - 6, y - 4, x + tw + 6, y + th + 4];
     if (!placed.some((o) => r0[0] < o[2] && r0[2] > o[0] && r0[1] < o[3] && r0[3] > o[1])) {
       ctx.globalAlpha = 0.018 + rng() * 0.02;
@@ -1198,9 +1268,9 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityLabel, play
   ctx.globalAlpha = 1;
 
   // Layer 4.
-  const bolt = genBolt(boltRng, 984, 24, 660, 648, 65, 5);
+  const bolt = genBolt(boltRng, 990, 18, 680, 520, 58, 5);
   const mid = bolt[Math.floor(bolt.length * 0.35)];
-  const branch = genBolt(boltRng, mid[0], mid[1], mid[0] + 90 + boltRng() * 60, mid[1] + 70 + boltRng() * 50, 30, 3);
+  const branch = genBolt(boltRng, mid[0], mid[1], mid[0] + 80 + boltRng() * 55, mid[1] + 60 + boltRng() * 45, 28, 3);
   drawBolt(ctx, bolt, "rgba(184,125,24,0.020)", 20);
   drawBolt(ctx, bolt, "rgba(184,125,24,0.036)", 12);
   drawBolt(ctx, bolt, "rgba(184,125,24,0.055)", 6);
@@ -1210,160 +1280,118 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityLabel, play
   drawBolt(ctx, branch, "rgba(184,125,24,0.040)", 2);
 
   // Layer 5.
-  ctx.strokeStyle = "rgba(184,125,24,0.20)";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(1, 1, SIZE - 2, SIZE - 2);
-  [[56, 56, 1, 1], [1144, 56, -1, 1], [56, 1144, 1, -1], [1144, 1144, -1, -1]].forEach(([x, y, dx, dy]) => {
+  ctx.strokeStyle = "rgba(184,125,24,0.22)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(20, 20, 1160, 860);
+  [[40, 40, 1, 1], [1160, 40, -1, 1], [40, 860, 1, -1], [1160, 860, -1, -1]].forEach(([x, y, dx, dy]) => {
     ctx.strokeStyle = "rgba(184,125,24,0.68)";
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
     ctx.moveTo(x, y);
-    ctx.lineTo(x + dx * 60, y);
+    ctx.lineTo(x + dx * 52, y);
     ctx.stroke();
     ctx.beginPath();
     ctx.moveTo(x, y);
-    ctx.lineTo(x, y + dy * 60);
+    ctx.lineTo(x, y + dy * 52);
     ctx.stroke();
-    ctx.fillStyle = "rgba(184,125,24,0.52)";
+    ctx.fillStyle = "rgba(184,125,24,0.55)";
     ctx.beginPath();
-    ctx.arc(x + dx * 6, y + dy * 6, 4, 0, Math.PI * 2);
+    ctx.arc(x + dx * 6, y + dy * 6, 3.5, 0, Math.PI * 2);
     ctx.fill();
   });
 
   // Layer 6.
-  if (logoImg) ctx.drawImage(logoImg, 56, 50, 48, 48);
-  ctx.font = '700 24px "Space Grotesk",monospace';
-  ctx.fillStyle = "rgba(240,230,208,0.80)";
-  ctx.textAlign = "left";
-  ctx.fillText("ODDS GODS", 116, 83);
+  if (logoImg) ctx.drawImage(logoImg, 80, 22, 52, 52);
 
   // Layer 7.
-  ctx.font = '400 19px "Space Grotesk",monospace';
+  const labelY = 112;
+  ctx.font = '400 17px "Space Grotesk",monospace';
   ctx.fillStyle = "rgba(240,230,208,0.36)";
   ctx.textAlign = "center";
-  ctx.fillText("WHAT ARE THE ODDS THAT...", 600, 226);
+  ctx.fillText("WHAT ARE THE ODDS THAT...", 600, labelY);
 
   // Layer 8.
-  const qSize = normalizedQuery.length < 48 ? 46 : normalizedQuery.length < 70 ? 38 : 32;
+  const qSize =
+    normalizedQuery.length < 42 ? 52 : normalizedQuery.length < 58 ? 44 : normalizedQuery.length < 75 ? 38 : 32;
   ctx.font = `italic 400 ${qSize}px "Instrument Serif",serif`;
   ctx.fillStyle = "rgba(240,230,208,0.90)";
   ctx.textAlign = "center";
-  const qLines = wrapText(ctx, normalizedQuery, 980);
-  const qLineH = qSize * 1.38;
-  let qY = 274;
+  const qLines = wrapText(ctx, normalizedQuery, 1020);
+  const qLineH = qSize * 1.4;
+  let qY = labelY + 38;
   qLines.forEach((line) => {
     ctx.fillText(line, 600, qY);
     qY += qLineH;
   });
-  const qBottom = qY;
+  const qBottom = qY + 8;
 
   // Layer 9.
-  const ruleY = qBottom + 22;
-  ctx.strokeStyle = "rgba(184,125,24,0.40)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(300, ruleY);
-  ctx.lineTo(900, ruleY);
-  ctx.stroke();
-
-  // Layer 10.
-  const HS_R = 84;
+  const HS_R = 72;
   const HS_CX = 600;
-  const HS_CY = ruleY + 36 + HS_R;
-  if (playerImg) {
+  const HS_CY = qBottom + HS_R + 16;
+  if (entityImg) {
     ctx.save();
     ctx.beginPath();
     ctx.arc(HS_CX, HS_CY, HS_R, 0, Math.PI * 2);
     ctx.clip();
-    ctx.drawImage(playerImg, HS_CX - HS_R, HS_CY - HS_R, HS_R * 2, HS_R * 2);
+    ctx.drawImage(entityImg, HS_CX - HS_R, HS_CY - HS_R, HS_R * 2, HS_R * 2);
     ctx.restore();
-    ctx.strokeStyle = "rgba(184,125,24,0.50)";
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(184,125,24,0.52)";
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
     ctx.arc(HS_CX, HS_CY, HS_R + 3, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.strokeStyle = "rgba(184,125,24,0.14)";
-    ctx.lineWidth = 10;
+    ctx.strokeStyle = "rgba(184,125,24,0.16)";
+    ctx.lineWidth = 9;
     ctx.beginPath();
-    ctx.arc(HS_CX, HS_CY, HS_R + 12, 0, Math.PI * 2);
+    ctx.arc(HS_CX, HS_CY, HS_R + 10, 0, Math.PI * 2);
     ctx.stroke();
   }
-  const headshotBottom = playerImg ? HS_CY + HS_R + 8 : ruleY + 20;
+  const imageBottom = entityImg ? HS_CY + HS_R : qBottom;
 
-  // Layer 11.
+  // Layer 10.
   const ODDS_SIZE = 200;
   ctx.font = `400 ${ODDS_SIZE}px "Space Grotesk",monospace`;
   ctx.textAlign = "center";
   const value = String(oddsStr || "").trim().toUpperCase();
-  const isPos = value.startsWith("+");
-  const isEven = value === "EVEN";
-  ctx.fillStyle = isPos
-    ? "rgba(74,222,128,0.96)"
-    : isEven
-      ? "rgba(184,125,24,0.96)"
-      : "rgba(248,113,113,0.96)";
+  ctx.fillStyle = "rgba(240,230,208,0.96)";
   ctx.shadowColor = "rgba(0,0,0,0.60)";
-  ctx.shadowBlur = 20;
-  ctx.shadowOffsetX = 4;
-  ctx.shadowOffsetY = 4;
-  const oddsY = headshotBottom + 24;
+  ctx.shadowBlur = 16;
+  ctx.shadowOffsetX = 3;
+  ctx.shadowOffsetY = 3;
+  const oddsY = imageBottom + 20;
   ctx.fillText(value || "N/A", 600, oddsY + ODDS_SIZE * 0.8);
   ctx.shadowColor = "transparent";
   const oddsBottom = oddsY + ODDS_SIZE * 0.92;
 
-  // Layer 12.
-  const chipText = String(entityLabel || "").trim() || "Hypothetical NFL estimate";
-  const chipY = oddsBottom + 16;
-  ctx.font = '600 26px "Space Grotesk",monospace';
-  const chipTW = ctx.measureText(chipText).width;
-  const chipW = Math.min(1020, chipTW + 48);
-  const chipH = 56;
-  const chipX = 600 - chipW / 2;
-  ctx.fillStyle = "rgba(26,21,13,0.92)";
-  roundRectPath(ctx, chipX, chipY, chipW, chipH, 5);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(184,125,24,0.30)";
-  ctx.lineWidth = 1;
-  roundRectPath(ctx, chipX, chipY, chipW, chipH, 5);
-  ctx.stroke();
-  ctx.fillStyle = "rgba(240,230,208,0.78)";
-  const chipLines = wrapText(ctx, chipText, chipW - 36).slice(0, 2);
-  const chipCenterY = chipY + chipH / 2 + (chipLines.length === 2 ? -7 : 0);
-  chipLines.forEach((line, idx) => {
-    ctx.fillText(line, 600, chipCenterY + idx * 26);
-  });
-  const chipBottom = chipY + chipH;
-
-  // Layer 13.
-  const implLabelY = chipBottom + 30;
-  ctx.font = '400 19px "Space Grotesk",monospace';
+  // Layer 11.
+  const implLabelY = oddsBottom + 16;
+  ctx.font = '400 17px "Space Grotesk",monospace';
   ctx.fillStyle = "rgba(240,230,208,0.36)";
   ctx.fillText("IMPLIED PROBABILITY", 600, implLabelY);
-  ctx.font = '700 54px "Space Grotesk",monospace';
-  ctx.fillStyle = "rgba(240,230,208,0.84)";
+  ctx.font = '700 52px "Space Grotesk",monospace';
+  ctx.fillStyle = "rgba(240,230,208,0.86)";
   ctx.fillText(String(impliedStr || "").trim() || "N/A", 600, implLabelY + 62);
 
-  // Layer 14.
-  const barY = 1108;
+  // Layer 12.
+  const barY = 854;
   ctx.strokeStyle = "rgba(184,125,24,0.26)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(56, barY);
-  ctx.lineTo(1144, barY);
+  ctx.moveTo(80, barY - 20);
+  ctx.lineTo(1120, barY - 20);
   ctx.stroke();
-  if (logoImg) ctx.drawImage(logoImg, 56, barY + 12, 30, 30);
-  ctx.font = '700 26px "Space Grotesk",monospace';
-  ctx.fillStyle = "rgba(184,125,24,0.82)";
+  ctx.font = '700 22px "Space Grotesk",monospace';
+  ctx.fillStyle = "rgba(184,125,24,0.85)";
   ctx.textAlign = "left";
-  ctx.fillText("oddsgods.com", 98, barY + 33);
-  ctx.font = '400 17px "Space Grotesk",monospace';
+  ctx.fillText("Try it yourself at OddsGods.net", 80, barY);
+  ctx.font = '400 15px "Space Grotesk",monospace';
   ctx.fillStyle = "rgba(240,230,208,0.22)";
   ctx.textAlign = "right";
-  ctx.fillText("Hypothetical estimate · Not betting advice", 1144, barY + 33);
+  ctx.fillText("Hypothetical estimate · Not betting advice", 1120, barY);
 
-  // Layer 15.
-  addCanvasGrain(ctx, SIZE, SIZE, 0.03);
-  ctx.restore();
+  // Layer 13.
+  addCanvasGrain(ctx, WIDTH, HEIGHT, 0.028);
   return canvas;
 }
 
@@ -1567,6 +1595,26 @@ copyBtn.addEventListener("click", copyCurrentResult);
 if (shareBtn) {
   shareBtn.addEventListener("click", shareCurrentResult);
 }
+if (shareModalOverlay) {
+  shareModalOverlay.addEventListener("click", (event) => {
+    if (event.target === shareModalOverlay) closeShareModal();
+  });
+}
+if (shareCancelBtn) {
+  shareCancelBtn.addEventListener("click", closeShareModal);
+}
+if (shareXBtn) {
+  shareXBtn.addEventListener("click", handleShareTwitter);
+}
+if (shareIgBtn) {
+  shareIgBtn.addEventListener("click", handleShareInstagram);
+}
+if (shareCopyImageBtn) {
+  shareCopyImageBtn.addEventListener("click", handleCopyImage);
+}
+if (shareDownloadBtn) {
+  shareDownloadBtn.addEventListener("click", handleDownloadShare);
+}
 if (flipBtn) {
   flipBtn.addEventListener("click", (event) => {
     event.preventDefault();
@@ -1620,6 +1668,9 @@ document.addEventListener("click", (event) => {
     return;
   }
   hideHeadshotProfile();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeShareModal();
 });
 if (feedbackUpBtn) {
   feedbackUpBtn.addEventListener("click", (event) => {

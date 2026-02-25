@@ -221,8 +221,6 @@ body {
 
 .prompt-container {
   position: relative;
-  display: flex;
-  align-items: center;
   background: var(--bg-surface);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-lg);
@@ -244,22 +242,17 @@ body {
   border: none;
   outline: none;
   font-family: var(--font-serif);
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 400;
   color: var(--text-primary);
-  height: 78px;
-  min-height: 78px;
-  padding: 0 var(--space-6);
+  padding: var(--space-6);
   padding-right: 188px;
-  line-height: 1;
+  line-height: 1.4;
   caret-color: var(--amber);
-  display: block;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  overflow: hidden;
-  margin: 0;
-  align-self: center;
-  transform: translateY(-1px);
+  resize: none;
+  min-height: 78px;
+  max-height: 140px;
+  overflow-y: auto;
 }
 
 .prompt-input::placeholder {
@@ -462,11 +455,11 @@ body {
 .result-query,
 .prompt-summary {
   font-family: var(--font-serif);
-  font-size: 22px;
+  font-size: 15px;
   color: var(--text-secondary);
   font-style: italic;
-  margin: 0 0 18px;
-  line-height: 1.45;
+  margin: 0 0 20px;
+  line-height: 1.4;
   text-align: center;
 }
 
@@ -475,11 +468,11 @@ body {
 }
 
 .prompt-summary--compact {
-  font-size: 20px;
+  font-size: 14px;
 }
 
 .prompt-summary--tiny {
-  font-size: 18px;
+  font-size: 13px;
 }
 
 .result-odds-row {
@@ -492,32 +485,29 @@ body {
   display: block;
   text-align: center;
   font-family: var(--font-mono);
-  font-size: clamp(52px, 8.8vw, 72px);
+  font-size: clamp(72px, 12vw, 96px);
   font-weight: 400;
-  color: #f1e7cf !important;
+  color: var(--text-primary);
   line-height: 1;
   letter-spacing: -0.02em;
-  margin-bottom: 10px;
-  text-shadow:
-    0 0 7px rgba(255, 255, 255, 0.2),
-    0 0 22px rgba(224, 191, 130, 0.24) !important;
+  margin-bottom: 12px;
 }
 
 .odds-output.positive {
-  color: #f1e7cf !important;
+  color: var(--green-win);
 }
 
 .odds-output.negative {
-  color: #f1e7cf !important;
+  color: var(--red-loss);
 }
 
 .odds-output.even {
-  color: #f1e7cf !important;
+  color: var(--text-amber);
 }
 
 .odds-output.lock-mode {
-  font-size: clamp(44px, 7.2vw, 56px);
-  margin-bottom: 10px;
+  font-size: clamp(56px, 9vw, 74px);
+  margin-bottom: 12px;
 }
 
 .odds-subline {
@@ -529,11 +519,6 @@ body {
   margin-top: var(--space-2);
 }
 
-.odds-output.live-shimmer,
-.odds-output.heartbeat-glow {
-  animation: oddsPulse 2.4s ease-in-out infinite;
-}
-
 .meta-grid {
   display: none;
 }
@@ -542,15 +527,15 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  margin: 16px 0;
+  gap: 14px;
+  margin: 10px 0 16px;
 }
 
 .player-headshot-wrap {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 56px;
+  min-height: 92px;
   position: relative;
 }
 
@@ -564,13 +549,13 @@ body {
 
 .entity-avatar,
 .player-headshot {
-  width: 84px;
-  height: 84px;
+  width: 92px;
+  height: 92px;
   border-radius: 50%;
   object-fit: cover;
   object-position: top;
   background: linear-gradient(150deg, rgba(23, 27, 38, 0.92), rgba(13, 17, 24, 0.95));
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 2px solid rgba(184, 125, 24, 0.3);
   padding: 0;
   flex-shrink: 0;
 }
@@ -586,16 +571,16 @@ body {
   background: var(--bg-raised);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
-  padding: 12px 18px;
+  padding: 12px 20px;
   font-family: var(--font-mono);
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 600;
   font-style: normal;
   color: var(--text-primary);
   letter-spacing: 0.02em;
   text-align: left;
-  line-height: 1.3;
-  max-width: min(400px, 64vw);
+  line-height: 1.22;
+  max-width: min(620px, 76vw);
 }
 
 .entity-overflow-badge {
@@ -664,34 +649,34 @@ body {
 
 .implied-section {
   text-align: center;
-  margin-top: 8px;
-  margin-bottom: 20px;
+  margin-top: 2px;
+  margin-bottom: 18px;
 }
 
 .implied-label {
   font-family: var(--font-mono);
   font-size: 10px;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--text-tertiary);
-  margin-bottom: 3px;
+  margin-bottom: 4px;
 }
 
 .implied-value {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 18px;
+  font-size: 22px;
   color: var(--text-secondary);
 }
 
 .result-summary {
   font-family: var(--font-serif);
-  font-size: 15px;
+  font-size: 16px;
   color: var(--text-primary);
-  line-height: 1.55;
-  margin-top: 20px;
+  line-height: 1.65;
+  margin-top: 24px;
   margin-bottom: 0;
-  padding-top: 16px;
+  padding-top: 20px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
@@ -721,9 +706,9 @@ body {
   background: var(--bg-inset);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
-  padding: 10px 14px;
+  padding: 12px 16px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--text-secondary);
@@ -759,12 +744,12 @@ body {
   margin: 10px 0 0;
   padding-left: 18px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
-  line-height: 1.65;
+  line-height: 1.7;
   background: var(--bg-inset);
   border-radius: var(--radius-md);
-  padding: 14px 16px;
+  padding: var(--space-5);
   border-left: 2px solid var(--amber-dim);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -911,73 +896,78 @@ body {
   gap: var(--space-2);
 }
 
-.share-card-capture {
+.share-modal-overlay {
   position: fixed;
-  left: -99999px;
-  top: -99999px;
-  width: 1200px;
-  pointer-events: none;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 999;
+  animation: fadeIn 180ms ease;
 }
 
-.share-card-shell {
-  width: 1200px;
-  height: 630px;
-  border-radius: 28px;
-  overflow: hidden;
-  background: radial-gradient(circle at 20% 10%, #2a1d10 0%, #11141c 60%, #0c0f15 100%);
-  color: var(--text-primary);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  display: grid;
-  grid-template-columns: 0.9fr 1.1fr;
+.share-modal {
+  background: #1a1510;
+  border: 1px solid rgba(184, 125, 24, 0.28);
+  border-radius: 16px 16px 0 0;
+  padding: 24px 20px 40px;
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.share-pane {
-  padding: 42px;
-}
-
-.share-kicker,
-.share-meta-label {
-  margin: 0;
+.share-modal-label {
   font-family: var(--font-mono);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
   font-size: 11px;
+  letter-spacing: 0.18em;
   color: var(--text-tertiary);
+  text-align: center;
+  margin: 0 0 8px;
 }
 
-.share-title {
-  margin: 14px 0;
-  font-family: var(--font-serif);
-  font-size: 62px;
-  line-height: 1.02;
+.share-modal button {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 16px;
+  font-family: var(--font-mono);
+  font-size: 15px;
   color: var(--text-primary);
+  cursor: pointer;
+  transition: background 180ms, border-color 180ms;
+  text-align: center;
 }
 
-.share-subtitle,
-.share-disclaimer,
-.share-meta-value {
-  margin: 0;
+.share-modal button:hover {
+  background: rgba(184, 125, 24, 0.12);
+  border-color: rgba(184, 125, 24, 0.35);
+}
+
+.share-modal-cancel {
+  color: var(--text-tertiary) !important;
+  background: transparent !important;
+  border-color: transparent !important;
+  margin-top: 4px;
+}
+
+.share-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 1000;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(184, 125, 24, 0.38);
+  background: rgba(12, 12, 12, 0.92);
+  color: var(--text-primary);
   font-family: var(--font-mono);
-  color: var(--text-secondary);
-}
-
-.share-odds {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 88px;
-  line-height: 0.95;
-}
-
-.share-summary {
-  margin: 18px 0 26px;
-  font-family: var(--font-serif);
-  font-size: 36px;
-}
-
-.share-meta {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
+  font-size: 13px;
+  animation: fadeIn 140ms ease;
 }
 
 .hidden {
@@ -1008,20 +998,6 @@ body {
 @keyframes spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@keyframes oddsPulse {
-  0%,
-  100% {
-    text-shadow:
-      0 0 7px rgba(255, 255, 255, 0.2),
-      0 0 20px rgba(224, 191, 130, 0.24);
-  }
-  50% {
-    text-shadow:
-      0 0 10px rgba(255, 255, 255, 0.34),
-      0 0 34px rgba(224, 191, 130, 0.42);
   }
 }
 
@@ -1066,14 +1042,9 @@ body {
   }
 
   .prompt-input {
-    min-height: 74px;
-    height: 74px;
+    min-height: 70px;
     padding-right: 136px;
-    padding-top: 0;
-    padding-bottom: 0;
-    line-height: 1;
-    font-size: 20px;
-    transform: translateY(-1px);
+    font-size: 18px;
   }
 
   .prompt-submit {
@@ -1086,7 +1057,7 @@ body {
 
   .result-odds-value,
   .odds-output {
-    font-size: clamp(44px, 14vw, 56px);
+    font-size: clamp(62px, 16vw, 78px);
   }
 
   .entity-row {
@@ -1094,11 +1065,16 @@ body {
     gap: 12px;
   }
 
+  .entity-avatar,
+  .player-headshot {
+    width: 84px;
+    height: 84px;
+  }
+
   .entity-chip {
+    font-size: 18px;
     max-width: 100%;
     text-align: center;
-    font-size: 17px;
-    padding: 10px 14px;
   }
 
   .site-footer {

@@ -24,10 +24,11 @@
 
     <header class="og-nav" id="site-nav">
       <div class="og-nav-inner">
-        <a class="og-wordmark" href="https://oddsgods.net"><span>ODDS</span> <strong>GODS</strong></a>
+        <a class="og-wordmark" href="/"><span>ODDS</span> <strong>GODS</strong></a>
         <nav class="og-links" id="nav-links">
-          <a href="https://bracket.oddsgods.net">The Bracket Lab</a>
-          <a href="https://wato.oddsgods.net" class="is-active">What Are the Odds?</a>
+          <a href="/bracket/">The Bracket Lab</a>
+          <a href="/what-are-the-odds/" class="is-active">What Are the Odds?</a>
+          <a class="btn btn-launch" href="/bracket/">Launch</a>
         </nav>
       </div>
     </header>
@@ -43,14 +44,15 @@
           <label for="scenario-input" class="prompt-label">What are the odds that...</label>
           <div class="input-row">
             <div id="prompt-container" class="prompt-container">
-              <input
+              <textarea
                 id="scenario-input"
                 class="prompt-input"
                 name="scenario"
+                rows="1"
                 maxlength="220"
                 placeholder="Josh Allen throws 30 touchdowns this season"
                 required
-              />
+              ></textarea>
               <button id="flip-btn" class="flip-button hidden" type="button" aria-label="Flip sides">
                 <span class="flip-button-icon">↺</span>
               </button>
@@ -114,31 +116,6 @@
           </p>
         </article>
 
-        <section id="share-card" class="share-card-capture" aria-hidden="true">
-          <div class="share-card-shell">
-            <div class="share-pane share-pane-left">
-              <p class="share-kicker">ODDS GODS</p>
-              <h2 class="share-title">What Are the Odds?</h2>
-              <p class="share-subtitle">NFL hypothetical estimate</p>
-              <p class="share-disclaimer">Hypothetical estimate for entertainment - not betting advice.</p>
-            </div>
-            <div class="share-pane share-pane-right">
-              <p id="share-odds-output" class="share-odds">+400</p>
-              <p id="share-summary-output" class="share-summary">Drake Maye wins MVP this season</p>
-              <div class="share-meta">
-                <div>
-                  <p class="share-meta-label">Implied Probability</p>
-                  <p id="share-probability-output" class="share-meta-value">20.0%</p>
-                </div>
-                <div>
-                  <p class="share-meta-label">Source</p>
-                  <p id="share-source-output" class="share-meta-value">Hypothetical model</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
         <article id="refusal-card" class="result-card refusal hidden" aria-live="polite">
           <p id="refusal-title" class="result-label">This tool can’t help with betting picks.</p>
           <p id="refusal-copy" class="refusal-message">
@@ -168,7 +145,18 @@
       </section>
     </main>
 
-    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+    <div id="share-modal-overlay" class="share-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="share-modal-label">
+      <div class="share-modal">
+        <p id="share-modal-label" class="share-modal-label">SHARE YOUR ODDS</p>
+        <button id="share-x-btn" type="button">𝕏 &nbsp; Post to X / Twitter</button>
+        <button id="share-ig-btn" type="button">Instagram</button>
+        <button id="share-copy-image-btn" type="button">Copy Image</button>
+        <button id="share-download-btn" type="button">Save to Camera Roll / Download</button>
+        <button id="share-cancel-btn" class="share-modal-cancel" type="button">Cancel</button>
+      </div>
+    </div>
+    <div id="share-toast" class="share-toast hidden" aria-live="polite"></div>
+
     <script src="../app.js"></script>
   </body>
 </html>

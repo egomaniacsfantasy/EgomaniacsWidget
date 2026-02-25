@@ -1044,7 +1044,12 @@ async function handleShareInstagram() {
 
 function shareCurrentResult() {
   if (resultCard.classList.contains("hidden")) return;
-  latestShareData = latestShareData || getCurrentShareData();
+  const liveData = getCurrentShareData();
+  latestShareData = {
+    ...(latestShareData || {}),
+    ...liveData,
+    entityImageUrl: liveData.entityImageUrl || latestShareData?.entityImageUrl || null,
+  };
   openShareModal();
 }
 
@@ -1120,9 +1125,13 @@ function getCurrentShareData() {
   const oddsStr = String(oddsOutput.textContent || "").trim();
   const impliedStr = String(probabilityOutput.textContent || "").trim();
   const primaryCluster = document.querySelector("#entity-strip img.entity-avatar");
+  const visiblePrimary = playerHeadshot && !playerHeadshot.classList.contains("hidden") ? playerHeadshot : null;
+  const visibleSecondary =
+    playerHeadshotSecondary && !playerHeadshotSecondary.classList.contains("hidden") ? playerHeadshotSecondary : null;
   const entityImageUrl =
     (primaryCluster && primaryCluster.getAttribute("src")) ||
-    playerHeadshot?.getAttribute("src") ||
+    (visiblePrimary && visiblePrimary.getAttribute("src")) ||
+    (visibleSecondary && visibleSecondary.getAttribute("src")) ||
     null;
   return {
     query,
@@ -1144,6 +1153,7 @@ function buildShareData(result, prompt) {
   const entityImageUrl =
     firstEntityImage ||
     String(result?.headshotUrl || "").trim() ||
+    String(result?.secondaryHeadshotUrl || "").trim() ||
     String(playerHeadshot?.getAttribute("src") || "").trim() ||
     null;
   return {
@@ -1203,7 +1213,11 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, l
   try {
     logoImg = await loadImage(logoPath || "/logo-icon.png");
   } catch (_error) {
-    logoImg = null;
+    try {
+      logoImg = await loadImage("/assets/logo-icon.png");
+    } catch (_error2) {
+      logoImg = null;
+    }
   }
   if (entityImageUrl) {
     try {
@@ -1245,6 +1259,12 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, l
     "XIV", "VII", "IX", "MMXXV", "XLVIII", "XCIX", "LVII", "LXIII", "XVI", "IV", "XLII", "XXXII",
   ]);
   const placed = [];
+  const cornerExclusion = [
+    [0, 0, 170, 170],
+    [WIDTH - 170, 0, WIDTH, 170],
+    [0, HEIGHT - 170, 170, HEIGHT],
+    [WIDTH - 170, HEIGHT - 170, WIDTH, HEIGHT],
+  ];
   let count = 0;
   while (count < 95) {
     const txt = FRAGS[Math.floor(rng() * FRAGS.length)];
@@ -1256,6 +1276,8 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, l
     const x = rng() * (WIDTH - tw - 20) + 10;
     const y = rng() * (HEIGHT - th - 20) + 10;
     const r0 = [x - 6, y - 4, x + tw + 6, y + th + 4];
+    const overlapsCorner = cornerExclusion.some((z) => r0[0] < z[2] && r0[2] > z[0] && r0[1] < z[3] && r0[3] > z[1]);
+    if (overlapsCorner) continue;
     if (!placed.some((o) => r0[0] < o[2] && r0[2] > o[0] && r0[1] < o[3] && r0[3] > o[1])) {
       ctx.globalAlpha = 0.018 + rng() * 0.02;
       ctx.fillStyle = "#f0e6d0";
@@ -1301,7 +1323,15 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, l
   });
 
   // Layer 6.
-  if (logoImg) ctx.drawImage(logoImg, 80, 22, 52, 52);
+  if (logoImg) {
+    ctx.drawImage(logoImg, 80, 22, 52, 52);
+  } else {
+    ctx.strokeStyle = "rgba(184,125,24,0.62)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(106, 48, 24, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
   // Layer 7.
   const labelY = 112;
@@ -1374,21 +1404,21 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, l
   ctx.fillText(String(impliedStr || "").trim() || "N/A", 600, implLabelY + 62);
 
   // Layer 12.
-  const barY = 854;
+  const barY = 812;
   ctx.strokeStyle = "rgba(184,125,24,0.26)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(80, barY - 20);
-  ctx.lineTo(1120, barY - 20);
+  ctx.moveTo(80, barY - 24);
+  ctx.lineTo(1120, barY - 24);
   ctx.stroke();
-  ctx.font = '700 22px "Space Grotesk",monospace';
+  ctx.font = '700 34px "Space Grotesk",monospace';
   ctx.fillStyle = "rgba(184,125,24,0.85)";
-  ctx.textAlign = "left";
-  ctx.fillText("Try it yourself at OddsGods.net", 80, barY);
+  ctx.textAlign = "center";
+  ctx.fillText("Try it yourself at OddsGods.net", 600, barY);
   ctx.font = '400 15px "Space Grotesk",monospace';
   ctx.fillStyle = "rgba(240,230,208,0.22)";
-  ctx.textAlign = "right";
-  ctx.fillText("Hypothetical estimate · Not betting advice", 1120, barY);
+  ctx.textAlign = "center";
+  ctx.fillText("Hypothetical estimate · Not betting advice", 600, barY + 30);
 
   // Layer 13.
   addCanvasGrain(ctx, WIDTH, HEIGHT, 0.028);

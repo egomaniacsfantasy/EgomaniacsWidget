@@ -242,17 +242,19 @@ body {
   border: none;
   outline: none;
   font-family: var(--font-serif);
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 400;
   color: var(--text-primary);
-  padding: var(--space-6);
+  height: 78px;
+  min-height: 78px;
+  padding: 20px var(--space-6);
   padding-right: 188px;
-  line-height: 1.4;
+  line-height: 1.15;
   caret-color: var(--amber);
   resize: none;
-  min-height: 78px;
   max-height: 140px;
   overflow-y: auto;
+  display: block;
 }
 
 .prompt-input::placeholder {
@@ -483,22 +485,25 @@ body {
   font-family: var(--font-mono);
   font-size: clamp(52px, 8.8vw, 72px);
   font-weight: 400;
-  color: var(--text-primary);
+  color: #f1e7cf;
   line-height: 1;
   letter-spacing: -0.02em;
   margin-bottom: 10px;
+  text-shadow:
+    0 0 7px rgba(255, 255, 255, 0.2),
+    0 0 22px rgba(224, 191, 130, 0.24);
 }
 
 .odds-output.positive {
-  color: var(--green-win);
+  color: #f1e7cf;
 }
 
 .odds-output.negative {
-  color: var(--red-loss);
+  color: #f1e7cf;
 }
 
 .odds-output.even {
-  color: var(--text-amber);
+  color: #f1e7cf;
 }
 
 .odds-output.lock-mode {
@@ -513,6 +518,11 @@ body {
   letter-spacing: 0.06em;
   color: var(--text-secondary);
   margin-top: var(--space-2);
+}
+
+.odds-output.live-shimmer,
+.odds-output.heartbeat-glow {
+  animation: oddsPulse 2.4s ease-in-out infinite;
 }
 
 .meta-grid {
@@ -992,6 +1002,20 @@ body {
   }
 }
 
+@keyframes oddsPulse {
+  0%,
+  100% {
+    text-shadow:
+      0 0 7px rgba(255, 255, 255, 0.2),
+      0 0 20px rgba(224, 191, 130, 0.24);
+  }
+  50% {
+    text-shadow:
+      0 0 10px rgba(255, 255, 255, 0.34),
+      0 0 34px rgba(224, 191, 130, 0.42);
+  }
+}
+
 @keyframes thinking {
   0%,
   100% {
@@ -1033,9 +1057,12 @@ body {
   }
 
   .prompt-input {
-    min-height: 70px;
+    min-height: 74px;
+    height: 74px;
     padding-right: 136px;
-    font-size: 18px;
+    padding-top: 18px;
+    padding-bottom: 18px;
+    font-size: 20px;
   }
 
   .prompt-submit {

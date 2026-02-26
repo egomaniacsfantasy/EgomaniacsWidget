@@ -8568,8 +8568,15 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
+app.get("/health", (_req, res) => {
+  res.status(200).json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    service: "odds-gods-wato",
+  });
+});
+
 app.listen(port, () => {
-  console.log(`What Are the Odds server running at http://localhost:${port}`);
   loadNflPlayerIndex(false).catch(() => {
     // Non-fatal: web verification remains as fallback.
   });
@@ -8597,7 +8604,6 @@ app.listen(port, () => {
         console.error("Boot self-test failed:", result.message);
         process.exit(1);
       }
-      console.log("Boot self-test passed.");
     }, 900);
   }
 });

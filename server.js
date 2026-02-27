@@ -524,6 +524,10 @@ installExternalToolProxy("/bracket-lab", BRACKET_APP_URL);
 installExternalToolProxy("/what-are-the-odds", WATO_APP_URL);
 installExternalToolProxy("/odds", WATO_APP_URL);
 
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "what-are-the-odds", "index.html"));
+});
+
 app.use(express.static("."));
 
 function isUnsafeImageHost(hostname) {

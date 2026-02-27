@@ -52,6 +52,11 @@ const tests = [
     assert: (r) => isRealMarket(r),
   },
   {
+    name: "Anchored playoffs: Patriots make playoffs",
+    prompt: "Patriots make the playoffs next season",
+    assert: (r) => r.odds === "-165" && parsePct(r.impliedProbability) >= 60,
+  },
+  {
     name: "WATO-56: Patriots win at least 9 games",
     prompt: "Patriots win at least 9 games next season",
     assert: (r) => isRealMarket(r),

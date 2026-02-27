@@ -1,0 +1,22 @@
+{
+  "asOf": "2026-02-26",
+  "source": "DraftKings snapshot",
+  "markets": {
+    "team_make_playoffs": {
+      "seasons": {
+        "2026-27": {
+          "teams": {
+            "NE": { "odds": "-165" },
+            "BUF": { "odds": "-220" }
+          }
+        },
+        "2027-28": {
+          "teams": {
+            "NE": { "odds": "-165" },
+            "BUF": { "odds": "-220" }
+          }
+        }
+      }
+    }
+  }
+}

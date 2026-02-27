@@ -47,6 +47,7 @@ const ACCOLADES_INDEX_FILE = process.env.ACCOLADES_INDEX_FILE || "data/accolades
 const MVP_PRIORS_FILE = process.env.MVP_PRIORS_FILE || "data/mvp_odds_2026_27_fanduel.json";
 const FEEDBACK_EVENTS_FILE = process.env.FEEDBACK_EVENTS_FILE || "data/feedback_events.jsonl";
 const ODDS_QUERY_EVENTS_FILE = process.env.ODDS_QUERY_EVENTS_FILE || "data/odds_query_events.jsonl";
+const ANCHORED_FUTURES_FILE = process.env.ANCHORED_FUTURES_FILE || "data/anchored_futures.json";
 const FEATURE_ENABLE_TRACE = String(process.env.FEATURE_ENABLE_TRACE || "true") === "true";
 const STRICT_BOOT_SELFTEST = String(process.env.STRICT_BOOT_SELFTEST || "false") === "true";
 const execFileAsync = promisify(execFile);
@@ -73,6 +74,8 @@ let accoladesIndex = null;
 let accoladesLoadedAt = 0;
 let mvpPriorsIndex = null;
 let mvpPriorsLoadedAt = 0;
+let anchoredFutures = null;
+let anchoredFuturesLoadedAt = 0;
 const metrics = {
   oddsRequests: 0,
   baselineServed: 0,
@@ -977,16 +980,61 @@ function applyDefaultNflSeasonInterpretation(prompt) {
   if (/\bbefore\b/i.test(text) && /\b(super bowl|mvp|championship|title|ring)\b/i.test(text)) return text;
   if (hasExplicitSeasonYear(text)) return text;
 
-  // Product rule: between seasons, "this year" and "next year" both reference upcoming NFL season.
+  // Normalize "this year" to "this season" but keep explicit "next season" semantics.
   text = text.replace(/\bthis year\b/gi, "this season");
-  text = text.replace(/\bnext year\b/gi, "this season");
-  text = text.replace(/\bnext season\b/gi, "this season");
-  text = text.replace(/\bupcoming season\b/gi, "this season");
+  text = text.replace(/\bupcoming season\b/gi, "next season");
 
   if (!/\bthis season\b/i.test(text) && !/\bseason\b/i.test(text)) {
     text = `${text} this season`;
   }
   return text.replace(/\s+/g, " ").trim();
+}
+
+function seasonKeyFromPrompt(prompt) {
+  const lower = normalizePrompt(prompt);
+  const baseYear = Number(String(DEFAULT_NFL_SEASON).slice(0, 4)) || new Date().getFullYear();
+  let year = baseYear;
+  const explicit = lower.match(/\b(20\d{2})\b/);
+  if (explicit) {
+    year = Number(explicit[1]);
+  } else if (/\b(next season|next year)\b/.test(lower)) {
+    year = baseYear + 1;
+  }
+  const suffix = String(year + 1).slice(-2);
+  return {
+    seasonKey: `${year}-${suffix}`,
+    seasonStartYear: year,
+  };
+}
+
+function getAnchoredLine({ marketKey, teamKey, seasonKey }) {
+  if (!marketKey || !teamKey) return null;
+  const data = anchoredFutures;
+  if (!data || typeof data !== "object") return null;
+  const market = data.markets?.[marketKey];
+  if (!market) return null;
+  const targetSeason = String(seasonKey || market.season || data.season || "").trim();
+  let teams = null;
+  if (market.seasons && targetSeason) {
+    teams = market.seasons?.[targetSeason]?.teams || null;
+  }
+  if (!teams) {
+    if (targetSeason && market.season && String(market.season) !== targetSeason) return null;
+    teams = market.teams || market.team || market;
+  }
+  const row = teams?.[teamKey];
+  if (!row || !row.odds) return null;
+  return {
+    americanOdds: String(row.odds),
+    asOf: String(
+      data.asOf ||
+      market.asOf ||
+      market.seasons?.[targetSeason]?.asOf ||
+      new Date().toISOString().slice(0, 10)
+    ),
+    source: String(data.source || market.source || "snapshot"),
+    confidence: String(row.confidence || "High"),
+  };
 }
 
 function applyPlayerAliases(text) {
@@ -4115,6 +4163,22 @@ async function loadMvpPriorsIndex() {
   }
 }
 
+async function loadAnchoredFutures() {
+  try {
+    const filePath = path.resolve(process.cwd(), ANCHORED_FUTURES_FILE);
+    const raw = await fs.readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") throw new Error("invalid anchored futures");
+    anchoredFutures = parsed;
+    anchoredFuturesLoadedAt = Date.now();
+    return anchoredFutures;
+  } catch (_error) {
+    anchoredFutures = null;
+    anchoredFuturesLoadedAt = 0;
+    return null;
+  }
+}
+
 function sanitizeFeedbackResult(result) {
   const r = result && typeof result === "object" ? result : {};
   return {
@@ -5031,17 +5095,51 @@ function nflTeamPlayoffMakePct(teamAbbr) {
 function buildTeamPlayoffEstimate(prompt, asOfDate) {
   const parsed = parseTeamPlayoffIntent(prompt);
   if (!parsed) return null;
-  const makePct = clamp(nflTeamPlayoffMakePct(parsed.teamAbbr), 2, 98);
-  const probPct = parsed.outcome === "miss" ? 100 - makePct : makePct;
+  const { seasonKey } = seasonKeyFromPrompt(prompt);
+  const anchor = getAnchoredLine({
+    marketKey: "team_make_playoffs",
+    teamKey: parsed.teamAbbr,
+    seasonKey,
+  });
   const teamName = NFL_TEAM_DISPLAY[parsed.teamAbbr] || parsed.teamAbbr;
+  if (anchor && /^[+-]\d+$/.test(anchor.americanOdds)) {
+    const anchorPct = americanOddsToProbabilityPct(anchor.americanOdds);
+    const probPct = parsed.outcome === "miss" ? clamp(100 - anchorPct, 1, 99) : clamp(anchorPct, 1, 99);
+    return {
+      status: "ok",
+      odds: toAmericanOdds(probPct),
+      impliedProbability: `${probPct.toFixed(1)}%`,
+      confidence: "High",
+      assumptions: [
+        `Anchored to sportsbook market snapshot (as of ${anchor.asOf}).`,
+      ],
+      playerName: null,
+      headshotUrl: null,
+      summaryLabel: `${teamName} ${parsed.outcome === "miss" ? "miss playoffs" : "make playoffs"}`,
+      liveChecked: true,
+      asOfDate: anchor.asOf || asOfDate || new Date().toISOString().slice(0, 10),
+      sourceType: "sportsbook_anchor",
+      sourceLabel: "Playoff market snapshot",
+      trace: {
+        pricingPath: "anchored",
+        anchorSource: anchor.source,
+        anchorAsOf: anchor.asOf,
+        seasonKeyUsed: seasonKey,
+        teamKeyResolved: parsed.teamAbbr,
+      },
+    };
+  }
+
+  const makePct = clamp(nflTeamPlayoffMakePct(parsed.teamAbbr), 5, 95);
+  const probPct = parsed.outcome === "miss" ? 100 - makePct : makePct;
   return {
     status: "ok",
     odds: toAmericanOdds(probPct),
     impliedProbability: `${probPct.toFixed(1)}%`,
     confidence: "Medium",
     assumptions: [
+      "Model-based estimate (no market line available).",
       "Deterministic team-strength playoff baseline model used.",
-      "Estimate reflects roster-era priors, schedule uncertainty, and league parity.",
     ],
     playerName: null,
     headshotUrl: null,
@@ -5051,9 +5149,9 @@ function buildTeamPlayoffEstimate(prompt, asOfDate) {
     sourceType: "historical_model",
     sourceLabel: "Team playoff baseline model",
     trace: {
-      baselineEventKey: "nfl_team_playoff_make_miss",
-      teamAbbr: parsed.teamAbbr,
-      outcome: parsed.outcome,
+      pricingPath: "model",
+      seasonKeyUsed: seasonKey,
+      teamKeyResolved: parsed.teamAbbr,
     },
   };
 }
@@ -10880,6 +10978,8 @@ app.get("/api/health", (_req, res) => {
     mvpPriorsLoaded: Boolean(mvpPriorsIndex),
     mvpPriorsVersion: mvpPriorsIndex?.version || null,
     mvpPriorsAsOfDate: mvpPriorsIndex?.asOfDate || null,
+    anchoredFuturesLoaded: Boolean(anchoredFutures),
+    anchoredFuturesAsOf: anchoredFutures?.asOf || null,
     feedbackFile: FEEDBACK_EVENTS_FILE,
     feedbackUp: metrics.feedbackUp,
     feedbackDown: metrics.feedbackDown,
@@ -10916,6 +11016,9 @@ app.listen(port, () => {
   });
   loadMvpPriorsIndex().catch(() => {
     // Non-fatal: MVP comparisons fall back to deterministic profile priors.
+  });
+  loadAnchoredFutures().catch(() => {
+    // Non-fatal: anchored futures fall back to model baselines.
   });
   if (STRICT_BOOT_SELFTEST) {
     setTimeout(async () => {

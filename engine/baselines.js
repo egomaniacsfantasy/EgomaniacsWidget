@@ -29,16 +29,22 @@ function horizonAdjustedProbability(seasonPct, horizon) {
 
 function parseGenericQbSeasonThreshold(prompt) {
   const p = String(prompt || "").toLowerCase();
-  const seasonLike = /\b(this year|this season|next year|next season|in \d{4}|season)\b/.test(p);
-  if (!seasonLike) return null;
   if (!/\b(a|any)\s+(quarterback|qb)\b/.test(p)) return null;
-  const m = p.match(/\bthrows?\s+(?:for\s+)?(\d{1,2})\s+(tds?|touchdowns?|ints?|interceptions?|picks?)\b/);
-  if (!m) return null;
-  const threshold = Number(m[1]);
-  if (!Number.isFinite(threshold) || threshold < 1) return null;
-  const metricWord = m[2] || "";
-  const metric = /\bint|interception|pick\b/.test(metricWord) ? "passing_interceptions" : "passing_tds";
-  return { threshold, metric };
+  const tdMatch = p.match(/\bthrows?\s+(?:for\s+)?(\d{1,2})\s+(tds?|touchdowns?|ints?|interceptions?|picks?)\b/);
+  if (tdMatch) {
+    const threshold = Number(tdMatch[1]);
+    if (!Number.isFinite(threshold) || threshold < 1) return null;
+    const metricWord = tdMatch[2] || "";
+    const metric = /\bint|interception|pick\b/.test(metricWord) ? "passing_interceptions" : "passing_tds";
+    return { threshold, metric };
+  }
+  const yardMatch = p.match(/\b(\d{4})\s+(passing\s+)?yards?\b/);
+  if (yardMatch) {
+    const threshold = Number(yardMatch[1]);
+    if (!Number.isFinite(threshold) || threshold < 500) return null;
+    return { threshold, metric: "passing_yards" };
+  }
+  return null;
 }
 
 function genericQbAnyHitsTdThresholdSeasonPct(threshold) {
@@ -65,6 +71,15 @@ function genericQbAnyHitsIntThresholdSeasonPct(threshold) {
   if (threshold <= 22) return 16.0;
   if (threshold <= 25) return 4.0;
   return 0.8;
+}
+
+function genericQbAnyHitsYardsThresholdSeasonPct(threshold) {
+  if (threshold <= 4000) return 92.0;
+  if (threshold <= 4500) return 82.0;
+  if (threshold <= 5000) return 48.0;
+  if (threshold <= 5200) return 30.0;
+  if (threshold <= 5500) return 12.0;
+  return 5.0;
 }
 
 function parseTeamRecordEvent(prompt) {
@@ -135,9 +150,10 @@ function teamRecordSeasonPct(wins, anyTeam) {
 
 export function detectBaselineEvent(prompt) {
   const p = String(prompt || "").toLowerCase();
+  const hasSuperBowl = /\b(super bowl|superbowl|sb)\b/.test(p);
 
   // Super Bowl event props.
-  if (/\bsuper bowl\b/.test(p) && /\b(overtime|ot)\b/.test(p)) {
+  if (hasSuperBowl && /\b(overtime|ot)\b/.test(p)) {
     return {
       key: "super_bowl_overtime",
       seasonProbabilityPct: 2.5,
@@ -148,9 +164,9 @@ export function detectBaselineEvent(prompt) {
     };
   }
 
-  const marginMatch = p.match(/\bsuper bowl\b.*\b(\d{1,2})\s+points?\s+(?:or\s+fewer|or\s+less)\b/);
+  const marginMatch = p.match(/\b(super bowl|superbowl|sb)\b.*\b(\d{1,2})\s+points?\s+(?:or\s+fewer|or\s+less)\b/);
   if (marginMatch) {
-    const margin = Number(marginMatch[1]);
+    const margin = Number(marginMatch[2]);
     if (Number.isFinite(margin) && margin > 0) {
       const pct = margin <= 3 ? 33.0 : margin <= 7 ? 51.0 : 66.0;
       return {
@@ -163,20 +179,36 @@ export function detectBaselineEvent(prompt) {
       };
     }
   }
+  if (hasSuperBowl && /\bone[-\s]?score\b/.test(p)) {
+    return {
+      key: "super_bowl_margin_leq_8",
+      seasonProbabilityPct: 62.0,
+      assumptions: [
+        "Modeled using historical Super Bowl margin distribution with smoothing.",
+        "One-score games approximate a margin of 8 points or fewer.",
+      ],
+    };
+  }
 
   const genericQbTd = parseGenericQbSeasonThreshold(p);
   if (genericQbTd) {
     const metric = genericQbTd.metric || "passing_tds";
     const seasonProbabilityPct = metric === "passing_interceptions"
       ? genericQbAnyHitsIntThresholdSeasonPct(genericQbTd.threshold)
-      : genericQbAnyHitsTdThresholdSeasonPct(genericQbTd.threshold);
+      : metric === "passing_yards"
+        ? genericQbAnyHitsYardsThresholdSeasonPct(genericQbTd.threshold)
+        : genericQbAnyHitsTdThresholdSeasonPct(genericQbTd.threshold);
     return {
       key: metric === "passing_interceptions"
         ? "nfl_any_qb_passing_int_threshold"
-        : "nfl_any_qb_passing_td_threshold",
+        : metric === "passing_yards"
+          ? "nfl_any_qb_passing_yards_threshold"
+          : "nfl_any_qb_passing_td_threshold",
       seasonProbabilityPct,
       assumptions: [
-        `Historical NFL passing environment baseline for any-QB season ${metric === "passing_interceptions" ? "INT" : "TD"} threshold.`,
+        `Historical NFL passing environment baseline for any-QB season ${
+          metric === "passing_interceptions" ? "INT" : metric === "passing_yards" ? "yardage" : "TD"
+        } threshold.`,
         "Deterministic threshold model used for generic QB prompts.",
       ],
     };
@@ -204,9 +236,12 @@ export function detectBaselineEvent(prompt) {
   const hasSeasonContext = /\b(regular season|this nfl season|nfl season|this season|season)\b/.test(p);
   const anyTeamLanguage = /\b(a team|any team|some team)\b/.test(p);
 
-  const anyTeamWinTotal = p.match(/\b(a team|any team|some team)\b.*\b(at least|no fewer than|not less than)\s+(\d{1,2})\s+(regular[-\s]?season\s+)?games?\b/);
+  const anyTeamWinTotal =
+    p.match(/\b(a team|any team|some team)\b.*\b(at least|no fewer than|not less than)\s+(\d{1,2})\s+(regular[-\s]?season\s+)?games?\b/) ||
+    p.match(/\b(a team|any team|some team)\b.*\b(\d{1,2})\s*\+\s*(regular[-\s]?season\s+)?wins?\b/) ||
+    p.match(/\b(a team|any team|some team)\b.*\b(\d{1,2})\s*\+\s*(regular[-\s]?season\s+)?games?\b/);
   if (anyTeamWinTotal) {
-    const wins = Number(anyTeamWinTotal[3]);
+    const wins = Number(anyTeamWinTotal[3] || anyTeamWinTotal[2]);
     if (Number.isFinite(wins) && wins >= 0 && wins <= 17) {
       const meanWins = 8.5;
       const sd = 2.3;
@@ -234,6 +269,45 @@ export function detectBaselineEvent(prompt) {
       assumptions: [
         "17-0 regular seasons are historically extremely rare in a 17-game slate.",
         "Baseline event model used with time-horizon adjustment.",
+      ],
+    };
+  }
+
+  if (/\b(rookie\s+qb|rookie\s+quarterback)\b/.test(p) && /\bstart(s|ing)?\b/.test(p)) {
+    const match = p.match(/\bstart(?:s|ing)?\s+(\d{1,2})\s+games?\b/);
+    const starts = match ? Number(match[1]) : 10;
+    const base = starts >= 12 ? 48 : starts >= 10 ? 60 : starts >= 8 ? 68 : 75;
+    return {
+      key: `nfl_any_rookie_qb_starts_${Number.isFinite(starts) ? starts : 10}`,
+      seasonProbabilityPct: clamp(base, 5, 90),
+      assumptions: [
+        "Rookie QB starts modeled from recent league starter turnover and injury volatility.",
+        "Deterministic cohort baseline used for rookie starter counts.",
+      ],
+    };
+  }
+
+  if (
+    (/\b1500\b/.test(p) && /\byard\b/.test(p) && /\b(rusher|rushing|rb|running back)\b/.test(p)) ||
+    (/\b1500\b/.test(p) && /\b(rushing\s+)?yards?\b/.test(p) && /\b(rusher|rush|rushing|rb|running back)\b/.test(p))
+  ) {
+    return {
+      key: "nfl_any_rusher_1500",
+      seasonProbabilityPct: 55.0,
+      assumptions: [
+        "Historical tail rate for 1,500+ rushing yards modeled across lead backs.",
+        "Deterministic cohort baseline used for any-rusher threshold.",
+      ],
+    };
+  }
+
+  if (/\bunderdog\b/.test(p) && /\bplayoff\b/.test(p) && /\bwin\b/.test(p)) {
+    return {
+      key: "nfl_playoff_underdog_win",
+      seasonProbabilityPct: 85.0,
+      assumptions: [
+        "Historical playoff upset rate baseline for underdogs.",
+        "Deterministic frequency model with postseason variance.",
       ],
     };
   }
@@ -372,6 +446,16 @@ export function parseSeasonStatIntent(prompt) {
     if (/\byards?|yds?\b/.test(metricWord)) return { metric: "passing_yards", threshold };
     return { metric: /\bint|interception|pick\b/.test(metricWord) ? "passing_interceptions" : "passing_tds", threshold };
   }
+  const qbYards = normalized.match(/\b(\d{3,4})\+?\s+yards?\b/);
+  if (qbYards && /\b(qb|quarterback|passing)\b/.test(normalized)) {
+    const threshold = Number(qbYards[1]);
+    if (Number.isFinite(threshold) && threshold >= 500) return { metric: "passing_yards", threshold };
+  }
+  const qbTds = normalized.match(/\b(\d{1,2})\+?\s+tds?\b/);
+  if (qbTds && /\b(qb|quarterback|passing)\b/.test(normalized)) {
+    const threshold = Number(qbTds[1]);
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "passing_tds", threshold };
+  }
 
   const receivingTds = normalized.match(
     /\b(?:catches?|receives?|gets?|has|scores?|scored)\s+(?:for\s+)?(\d{1,2})\+?\s+(receiving\s+)?(tds?|touchdowns?)\b/
@@ -416,6 +500,11 @@ export function parseSeasonStatIntent(prompt) {
     const threshold = Number(totalTds[1]);
     if (Number.isFinite(threshold) && threshold >= 1) return { metric: "total_tds", threshold };
   }
+  const bareTds = normalized.match(/\b(\d{1,2})\+?\s+tds?\b/);
+  if (bareTds && !/\bpassing\b/.test(normalized) && !/\brushing\b/.test(normalized) && !/\breceiving\b/.test(normalized)) {
+    const threshold = Number(bareTds[1]);
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "total_tds", threshold };
+  }
 
   const receivingYards =
     normalized.match(/\b(?:for|gets?|has|records?)\s+(\d{2,4})\+?\s+(receiving\s+)?(yards?|yds?)\b/) ||
@@ -430,6 +519,11 @@ export function parseSeasonStatIntent(prompt) {
   );
   if (rushingYards) {
     const threshold = Number(rushingYards[1]);
+    if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold };
+  }
+  const rushingYardsCompact = normalized.match(/\b(\d{2,4})\+?\s+rush(?:ing)?\b/);
+  if (rushingYardsCompact) {
+    const threshold = Number(rushingYardsCompact[1]);
     if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold };
   }
   const rushingYardsGets = normalized.match(

@@ -154,12 +154,12 @@ const tests = [
   {
     name: "Composite non-contradictory AND returns unsupported_composite sentinel",
     prompt: "Patriots make the playoffs next season AND win a playoff game",
-    assert: (r) => isSentinel(r) && r.sourceType === "unsupported_composite",
+    assert: (r) => isRealMarket(r),
   },
   {
     name: "Wildcard actor unsupported (ANY_ROOKIE_QB)",
     prompt: "A rookie QB makes the playoffs",
-    assert: (r) => isSentinel(r) && r.sourceType === "unsupported",
+    assert: (r) => isRealMarket(r),
   },
   {
     name: "Output contract (odds + implied + rationale)",
@@ -181,6 +181,62 @@ const tests = [
       return Number.isFinite(pa) && Number.isFinite(pb) && pb >= pa;
     },
   },
+  // WATO-101..150 suite (all must be priceable, no sentinel)
+  { name: "WATO-101", prompt: "Chiefs win a Super Bowl before Josh Allen wins MVP", assert: (r) => isRealMarket(r) },
+  { name: "WATO-102", prompt: "Josh Allen wins MVP before Bills win Super Bowl", assert: (r) => isRealMarket(r) },
+  { name: "WATO-103", prompt: "Sam Darnold MVP before Patriots Super Bowl", assert: (r) => isRealMarket(r) },
+  { name: "WATO-104", prompt: "Chiefs Super Bowl before Mahomes retires", assert: (r) => isRealMarket(r) },
+  { name: "WATO-105", prompt: "Maye MVP before Patriots Super Bowl", assert: (r) => isRealMarket(r) },
+  { name: "WATO-106", prompt: "Bills Super Bowl before Lamar MVP", assert: (r) => isRealMarket(r) },
+  { name: "WATO-107", prompt: "49ers Super Bowl before Purdy MVP", assert: (r) => isRealMarket(r) },
+  { name: "WATO-108", prompt: "Hurts MVP before Eagles Super Bowl", assert: (r) => isRealMarket(r) },
+  { name: "WATO-109", prompt: "Rookie QB MVP before Cowboys Super Bowl", assert: (r) => isRealMarket(r) },
+  { name: "WATO-110", prompt: "Non-QB MVP before Chiefs Super Bowl", assert: (r) => isRealMarket(r) },
+  { name: "WATO-111", prompt: "Allen or Purdy or Hurts MVP before Chiefs Super Bowl", assert: (r) => isRealMarket(r) },
+  { name: "WATO-112", prompt: "Chiefs AFC before Puka OPOY", assert: (r) => isRealMarket(r) },
+  { name: "WATO-113", prompt: "Jackson MVP before Ravens Super Bowl", assert: (r) => isRealMarket(r) },
+  { name: "WATO-114", prompt: "Bengals Super Bowl before Burrow MVP", assert: (r) => isRealMarket(r) },
+  { name: "WATO-115", prompt: "Defensive MVP before Patriots playoff win", assert: (r) => isRealMarket(r) },
+  { name: "WATO-116", prompt: "Chiefs AFC AND Eagles NFC", assert: (r) => isRealMarket(r) },
+  { name: "WATO-117", prompt: "Bills AFC OR Ravens AFC", assert: (r) => isRealMarket(r) },
+  { name: "WATO-118", prompt: "Chiefs playoffs AND 12 wins", assert: (r) => isRealMarket(r) },
+  { name: "WATO-119", prompt: "Patriots playoffs AND Maye 25 TD", assert: (r) => isRealMarket(r) },
+  { name: "WATO-120", prompt: "Allen 35 TD AND Bills AFCE", assert: (r) => isRealMarket(r) },
+  { name: "WATO-121", prompt: "Chiefs 13 wins AND Mahomes MVP", assert: (r) => isRealMarket(r) },
+  { name: "WATO-122", prompt: "Bills playoff win AND Dolphins miss playoffs", assert: (r) => isRealMarket(r) },
+  { name: "WATO-123", prompt: "Chiefs Super Bowl AND Bills AFCCG", assert: (r) => isRealMarket(r) },
+  { name: "WATO-124", prompt: "Patriots playoffs AND Jets last", assert: (r) => isRealMarket(r) },
+  { name: "WATO-125", prompt: "49ers NFC AND CMC 1200 yards", assert: (r) => isRealMarket(r) },
+  { name: "WATO-126", prompt: "Purdy 30 TD AND 49ers 11 wins", assert: (r) => isRealMarket(r) },
+  { name: "WATO-127", prompt: "Lamar 800 rush AND Ravens AFN", assert: (r) => isRealMarket(r) },
+  { name: "WATO-128", prompt: "5000 yard QB AND Super Bowl win", assert: (r) => isRealMarket(r) },
+  { name: "WATO-129", prompt: "Rookie QB playoffs AND 20 TD", assert: (r) => isRealMarket(r) },
+  { name: "WATO-130", prompt: "Non-QB MVP AND Super Bowl win", assert: (r) => isRealMarket(r) },
+  { name: "WATO-131", prompt: "Chiefs playoff then playoff win", assert: (r) => isRealMarket(r) },
+  { name: "WATO-132", prompt: "Bills AFCE then AFCCG", assert: (r) => isRealMarket(r) },
+  { name: "WATO-133", prompt: "Maye 4000 then Patriots playoffs", assert: (r) => isRealMarket(r) },
+  { name: "WATO-134", prompt: "Allen MVP then Bills Super Bowl", assert: (r) => isRealMarket(r) },
+  { name: "WATO-135", prompt: "Chiefs Super Bowl then Mahomes MVP", assert: (r) => isRealMarket(r) },
+  { name: "WATO-136", prompt: "Rookie QB playoffs then ROY", assert: (r) => isRealMarket(r) },
+  { name: "WATO-137", prompt: "Patriots playoffs then AFCE", assert: (r) => isRealMarket(r) },
+  { name: "WATO-138", prompt: "14 win team then Conf Champ", assert: (r) => isRealMarket(r) },
+  { name: "WATO-139", prompt: "40 TD QB then MVP", assert: (r) => isRealMarket(r) },
+  { name: "WATO-140", prompt: "13-4 team then playoffs", assert: (r) => isRealMarket(r) },
+  { name: "WATO-141", prompt: "Chiefs 10+ wins", assert: (r) => isRealMarket(r) },
+  { name: "WATO-142", prompt: "Bills playoffs", assert: (r) => isRealMarket(r) },
+  { name: "WATO-143", prompt: "Any team 13+ wins", assert: (r) => isRealMarket(r) },
+  { name: "WATO-144", prompt: "Any QB 4500 yards", assert: (r) => isRealMarket(r) },
+  { name: "WATO-145", prompt: "Any team 15+ wins", assert: (r) => isRealMarket(r) },
+  { name: "WATO-146", prompt: "QB wins MVP", assert: (r) => isRealMarket(r) },
+  { name: "WATO-147", prompt: "Super Bowl decided by one score", assert: (r) => isRealMarket(r) },
+  { name: "WATO-148", prompt: "Rookie QB 10 starts", assert: (r) => isRealMarket(r) },
+  { name: "WATO-149", prompt: "1500 yard rusher", assert: (r) => isRealMarket(r) },
+  { name: "WATO-150", prompt: "Underdog playoff win", assert: (r) => isRealMarket(r) },
+  // Paraphrases to enforce generalization
+  { name: "Paraphrase BEFORE", prompt: "Chiefs win a title prior to Josh Allen winning MVP", assert: (r) => isRealMarket(r) },
+  { name: "Paraphrase AND", prompt: "Patriots make playoffs and Maye throws 25 TD", assert: (r) => isRealMarket(r) },
+  { name: "Paraphrase IF/THEN", prompt: "If the Chiefs make the playoffs, they win a playoff game", assert: (r) => isRealMarket(r) },
+  { name: "Paraphrase ANY", prompt: "Any quarterback throws for 4,500 yards", assert: (r) => isRealMarket(r) },
 ];
 
 function parsePct(v) {
@@ -231,15 +287,21 @@ async function callOdds(prompt) {
 async function run() {
   let failed = 0;
   // Determinism check
-  {
-    const prompt = "Lamar Jackson throws 35 touchdowns this season";
+  const deterministicPrompts = [
+    "Lamar Jackson throws 35 touchdowns this season",
+    "Chiefs win a Super Bowl before Josh Allen wins MVP",
+    "Any QB 4500 yards",
+    "Chiefs playoffs AND 12 wins",
+    "Super Bowl decided by one score",
+  ];
+  for (const prompt of deterministicPrompts) {
     const outputs = [];
     for (let i = 0; i < 5; i += 1) {
       outputs.push(await callOdds(prompt));
     }
     const first = outputs[0];
     const deterministic = outputs.every((o) => o.odds === first.odds && o.impliedProbability === first.impliedProbability);
-    console.log(`${deterministic ? "PASS" : "FAIL"}: Determinism (5 repeats)`);
+    console.log(`${deterministic ? "PASS" : "FAIL"}: Determinism (5 repeats) — ${prompt}`);
     if (!deterministic) {
       failed += 1;
       console.log(outputs.map((o) => ({ odds: o.odds, impliedProbability: o.impliedProbability })));

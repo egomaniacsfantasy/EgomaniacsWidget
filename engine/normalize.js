@@ -43,8 +43,39 @@ export function stripTrailingInstructions(text) {
   return out;
 }
 
+function stripLeadingQuestionPrefixes(text) {
+  let out = String(text || "").trim();
+  if (!out) return out;
+  const prefixes = [
+    /^(what\s+are\s+the\s+odds\s+that)\b/i,
+    /^(what\s+are\s+the\s+odds)\b/i,
+    /^(odds\s+that)\b/i,
+    /^(odds\s+of)\b/i,
+    /^(what's\s+the\s+odds\s+that)\b/i,
+    /^(what\s+is\s+the\s+probability\s+that)\b/i,
+    /^(what's\s+the\s+probability\s+that)\b/i,
+    /^(what\s+are\s+the\s+chances\s+that)\b/i,
+    /^(is\s+it\s+likely\s+that)\b/i,
+    /^(give\s+me\s+odds\s+on)\b/i,
+    /^(give\s+me\s+the\s+odds\s+on)\b/i,
+    /^(give\s+me\s+odds\s+of)\b/i,
+    /^(give\s+me\s+the\s+odds\s+of)\b/i,
+    /^(give\s+me\s+odds\s+for)\b/i,
+    /^(give\s+me\s+the\s+odds\s+for)\b/i,
+    /^(what\s+are\s+the\s+chances)\b/i,
+  ];
+  for (const re of prefixes) {
+    if (re.test(out)) {
+      out = out.replace(re, "").replace(/^[:\s-]+/, "");
+      break;
+    }
+  }
+  return out.trim();
+}
+
 export function normalizeForParsing(text) {
   let out = normalizeUnicode(text);
+  out = stripLeadingQuestionPrefixes(out);
   out = stripTrailingInstructions(out);
   out = collapsePunctuation(out);
   out = collapseWhitespace(out);

@@ -17,7 +17,6 @@ function toAmericanOdds(probabilityPct) {
 
 export function applyConsistencyRules({ prompt, intent, result, companion }) {
   if (!result || result.status !== "ok") return result;
-  if (String(result.odds || "").toUpperCase() === "NO CHANCE") return result;
 
   let prob = americanOddsToProbabilityPct(result.odds);
   if (!Number.isFinite(prob)) return result;
@@ -36,8 +35,8 @@ export function applyConsistencyRules({ prompt, intent, result, companion }) {
   if (/\b(dead|deceased)\b/.test(lower) && /\bcomes out of retirement|returns? to play\b/.test(lower)) {
     return {
       ...result,
-      odds: "NO CHANCE",
-      impliedProbability: "0.0%",
+      odds: "+100000",
+      impliedProbability: "0.1%",
       confidence: "High",
       sourceType: "constraint_model",
       sourceLabel: "Hard impossibility constraint",

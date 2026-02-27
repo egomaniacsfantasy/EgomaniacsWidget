@@ -1,9 +1,11 @@
+import { normalizeForParsing } from "./normalize.js";
+
 export function normalizeWhitespace(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
 
 export function parseTimeHorizon(prompt) {
-  const p = normalizeWhitespace(prompt).toLowerCase();
+  const p = normalizeForParsing(prompt).toLowerCase();
   const hasExplicitSeason = /\b(this year|this season|next year|next season|upcoming season|in \d{4})\b/.test(p);
   const hasHallOfFame = /\b(hall of fame|hof)\b/.test(p);
   if (/\b(next|over|within)\s+\d{1,2}\s+(years|seasons)\b/.test(p)) return "multi_year";
@@ -19,7 +21,7 @@ export function parseTimeHorizon(prompt) {
 }
 
 export function parseIntent(prompt) {
-  const text = normalizeWhitespace(prompt);
+  const text = normalizeForParsing(prompt);
   const lower = text.toLowerCase();
   const horizon = parseTimeHorizon(text);
   const league = /\bnfl\b/.test(lower)

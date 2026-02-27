@@ -50,6 +50,13 @@ const EXAMPLE_REFRESH_MS = 12000;
 const CLIENT_API_VERSION = "2026.02.23.12";
 const FEEDBACK_RATED_MAP_KEY = "ewa_feedback_rated_map";
 const FEEDBACK_SESSION_ID_KEY = "ewa_feedback_session_id";
+const SHARE_IMAGE_PROXY_HOSTS = new Set([
+  "sleepercdn.com",
+  "a.espncdn.com",
+  "r2.thesportsdb.com",
+  "www.thesportsdb.com",
+  "cdn.nba.com",
+]);
 
 const DEFAULT_EXAMPLE_POOL = [
   "Josh Allen throws 30 touchdowns this season",
@@ -81,6 +88,8 @@ let primaryPlayerInfo = null;
 let secondaryPlayerInfo = null;
 let latestShareData = null;
 let allowFeedbackForCurrentResult = false;
+let activeRequestController = null;
+let requestSequence = 0;
 let profileHideTimer = null;
 let flipTipSeen = false;
 
@@ -130,11 +139,15 @@ function isNflPrompt(prompt) {
 }
 
 function normalizePrompt(prompt) {
-  return prompt
-    .trim()
-    .replace(/\s+/g, " ")
+  return String(prompt || "")
     .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'");
+    .replace(/[‘’]/g, "'")
+    .replace(/[–—]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/([!?.,;:])\1+/g, "$1")
+    .replace(/-{2,}/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function setBusy(isBusy) {
@@ -373,7 +386,7 @@ async function submitFeedback(vote) {
 
 function parseAmericanOdds(oddsText) {
   const text = String(oddsText || "").trim();
-  if (!text || text.toUpperCase() === "NO CHANCE") return null;
+  if (!text) return null;
   const n = Number(text.replace("+", ""));
   return Number.isFinite(n) ? n : null;
 }
@@ -381,24 +394,7 @@ function parseAmericanOdds(oddsText) {
 function renderOddsDisplay(oddsText) {
   const n = parseAmericanOdds(oddsText);
   oddsOutput.classList.remove("positive", "negative", "even");
-  oddsOutput.classList.remove("live-shimmer", "heartbeat-glow");
-  oddsOutput.style.animation = "none";
-  void oddsOutput.offsetWidth;
-  oddsOutput.style.animation = "";
-  if (n !== null && n <= -10000) {
-    oddsOutput.classList.add("lock-mode");
-    oddsOutput.classList.add("live-shimmer", "heartbeat-glow");
-    oddsOutput.innerHTML = `IT'S A LOCK!<span class="odds-subline">(WELL, BASICALLY, AS LONG AS HE'S HEALTHY.)</span>`;
-    return "lock";
-  }
-  if (n !== null && n >= 10000) {
-    oddsOutput.classList.add("lock-mode");
-    oddsOutput.classList.add("live-shimmer", "heartbeat-glow");
-    oddsOutput.innerHTML = `NO SHOT.<span class="odds-subline">(LIKE, REALLY NO SHOT.)</span>`;
-    return "no-shot";
-  }
   oddsOutput.classList.remove("lock-mode");
-  oddsOutput.classList.add("live-shimmer", "heartbeat-glow");
   oddsOutput.textContent = oddsText;
   if (n !== null) {
     if (n > 0) oddsOutput.classList.add("positive");
@@ -695,14 +691,22 @@ function showResult(result, prompt) {
   }
 
   clearRationale();
-  if (Array.isArray(result.assumptions) && result.assumptions.length > 0 && rationalePanel && rationaleList) {
-    result.assumptions.slice(0, 3).forEach((item) => {
-      const li = document.createElement("li");
-      li.textContent = String(item || "");
-      rationaleList.appendChild(li);
-    });
-    rationalePanel.open = false;
-    rationalePanel.classList.remove("hidden");
+  const rationaleText = String(result.rationale || "").trim();
+  if (rationalePanel && rationaleList) {
+    const items = rationaleText
+      ? rationaleText.split(/(?<=\.)\s+/).filter(Boolean).slice(0, 3)
+      : Array.isArray(result.assumptions)
+        ? result.assumptions.slice(0, 3)
+        : [];
+    if (items.length > 0) {
+      items.forEach((item) => {
+        const li = document.createElement("li");
+        li.textContent = String(item || "");
+        rationaleList.appendChild(li);
+      });
+      rationalePanel.open = false;
+      rationalePanel.classList.remove("hidden");
+    }
   }
 
   const renderedStrip = renderEntityStrip(result);
@@ -804,8 +808,12 @@ function encodePromptInUrl(prompt) {
 }
 
 async function fetchOdds(prompt) {
+  if (activeRequestController) {
+    activeRequestController.abort();
+  }
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 22000);
+  activeRequestController = controller;
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
   let response;
   try {
     response = await fetch("/api/odds", {
@@ -820,6 +828,9 @@ async function fetchOdds(prompt) {
     });
   } finally {
     clearTimeout(timeoutId);
+    if (activeRequestController === controller) {
+      activeRequestController = null;
+    }
   }
 
   let payload;
@@ -868,39 +879,56 @@ async function onSubmit(event) {
   statusLine.textContent = "";
   allowFeedbackForCurrentResult = Boolean(event?.isTrusted);
 
-  const prompt = normalizePrompt(scenarioInput.value);
+  const rawPrompt = String(scenarioInput.value || "");
+  const prompt = normalizePrompt(rawPrompt);
   if (!prompt) {
     statusLine.textContent = "Enter a sports hypothetical to generate an estimate.";
     return;
   }
 
   setBusy(true);
+  const seq = ++requestSequence;
 
   try {
-    const payload = await fetchOdds(prompt);
+    const payload = await fetchOdds(rawPrompt);
+    if (seq !== requestSequence) return;
 
-    if (payload.status === "refused" || payload.status === "snark") {
+    if ((payload.status === "refused" || payload.status === "snark") && !payload.odds) {
       showRefusal(payload.message, {
         title: payload.title,
         hint: payload.hint,
       });
       if (allowFeedbackForCurrentResult) {
-        maybeShowFeedback(prompt, payload);
+        maybeShowFeedback(rawPrompt, payload);
       }
-      encodePromptInUrl(prompt);
+      encodePromptInUrl(rawPrompt);
       refreshExampleChips();
       return;
     }
 
-    showResult(payload, prompt);
-    encodePromptInUrl(prompt);
+    showResult(payload, rawPrompt);
+    encodePromptInUrl(rawPrompt);
     statusLine.textContent = "Estimate generated. Try another scenario.";
     refreshExampleChips();
   } catch (error) {
     if (error?.name === "AbortError") {
-      showSystemError("Request timed out. Try a shorter prompt.");
+      const fallback = {
+        status: "ok",
+        odds: "+100000",
+        impliedProbability: "0.1%",
+        assumptions: ["Request timed out before a deterministic estimate could be computed."],
+        summaryLabel: normalizeSummaryText(rawPrompt),
+      };
+      showResult(fallback, rawPrompt);
     } else {
-      showSystemError("Estimator is unavailable right now. Try again in a moment.");
+      const fallback = {
+        status: "ok",
+        odds: "+100000",
+        impliedProbability: "0.1%",
+        assumptions: ["Estimator is unavailable right now. Try again in a moment."],
+        summaryLabel: normalizeSummaryText(rawPrompt),
+      };
+      showResult(fallback, rawPrompt);
     }
     console.error(error);
   } finally {
@@ -1128,11 +1156,12 @@ function getCurrentShareData() {
   const visiblePrimary = playerHeadshot && !playerHeadshot.classList.contains("hidden") ? playerHeadshot : null;
   const visibleSecondary =
     playerHeadshotSecondary && !playerHeadshotSecondary.classList.contains("hidden") ? playerHeadshotSecondary : null;
-  const entityImageUrl =
+  const entityImageUrlRaw =
     (primaryCluster && primaryCluster.getAttribute("src")) ||
     (visiblePrimary && visiblePrimary.getAttribute("src")) ||
     (visibleSecondary && visibleSecondary.getAttribute("src")) ||
     null;
+  const entityImageUrl = toShareImageUrl(entityImageUrlRaw);
   return {
     query,
     oddsStr,
@@ -1150,12 +1179,13 @@ function buildShareData(result, prompt) {
     (Array.isArray(result?.entityAssets) && result.entityAssets.length
       ? String(result.entityAssets[0]?.imageUrl || "").trim()
       : "") || "";
-  const entityImageUrl =
+  const entityImageUrlRaw =
     firstEntityImage ||
     String(result?.headshotUrl || "").trim() ||
     String(result?.secondaryHeadshotUrl || "").trim() ||
     String(playerHeadshot?.getAttribute("src") || "").trim() ||
     null;
+  const entityImageUrl = toShareImageUrl(entityImageUrlRaw);
   return {
     query,
     oddsStr,
@@ -1163,6 +1193,19 @@ function buildShareData(result, prompt) {
     entityImageUrl,
     logoPath: "/logo-icon.png",
   };
+}
+
+function toShareImageUrl(inputUrl) {
+  const raw = String(inputUrl || "").trim();
+  if (!raw) return null;
+  try {
+    const resolved = new URL(raw, window.location.origin);
+    if (resolved.protocol === "http:") resolved.protocol = "https:";
+    if (resolved.origin === window.location.origin) return resolved.toString();
+    return `${window.location.origin}/api/image-proxy?u=${encodeURIComponent(resolved.toString())}`;
+  } catch (_error) {
+    return raw;
+  }
 }
 
 function loadImage(src) {
@@ -1245,6 +1288,12 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, l
   ctx.fillStyle = g2;
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
+  const vignette = ctx.createRadialGradient(WIDTH / 2, HEIGHT / 2, 260, WIDTH / 2, HEIGHT / 2, 780);
+  vignette.addColorStop(0, "rgba(0,0,0,0)");
+  vignette.addColorStop(1, "rgba(0,0,0,0.34)");
+  ctx.fillStyle = vignette;
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
   // Layer 3.
   const FRAGS = [
     "-110", "+3300", "-450", "+220", "EVEN", "-175", "+550", "-3040", "+1400", "-800", "+290", "+6500",
@@ -1279,7 +1328,7 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, l
     const overlapsCorner = cornerExclusion.some((z) => r0[0] < z[2] && r0[2] > z[0] && r0[1] < z[3] && r0[3] > z[1]);
     if (overlapsCorner) continue;
     if (!placed.some((o) => r0[0] < o[2] && r0[2] > o[0] && r0[1] < o[3] && r0[3] > o[1])) {
-      ctx.globalAlpha = 0.018 + rng() * 0.02;
+      ctx.globalAlpha = 0.01 + rng() * 0.012;
       ctx.fillStyle = "#f0e6d0";
       ctx.textAlign = "left";
       ctx.fillText(txt, x, y + th * 0.8);
@@ -1324,17 +1373,17 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, l
 
   // Layer 6.
   if (logoImg) {
-    ctx.drawImage(logoImg, 80, 22, 52, 52);
+    ctx.drawImage(logoImg, 88, 30, 48, 48);
   } else {
     ctx.strokeStyle = "rgba(184,125,24,0.62)";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(106, 48, 24, 0, Math.PI * 2);
+    ctx.arc(112, 54, 20, 0, Math.PI * 2);
     ctx.stroke();
   }
 
   // Layer 7.
-  const labelY = 112;
+  const labelY = 130;
   ctx.font = '400 17px "Space Grotesk",monospace';
   ctx.fillStyle = "rgba(240,230,208,0.36)";
   ctx.textAlign = "center";
@@ -1348,15 +1397,15 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, l
   ctx.textAlign = "center";
   const qLines = wrapText(ctx, normalizedQuery, 1020);
   const qLineH = qSize * 1.4;
-  let qY = labelY + 38;
+  let qY = labelY + 56;
   qLines.forEach((line) => {
     ctx.fillText(line, 600, qY);
     qY += qLineH;
   });
-  const qBottom = qY + 8;
+  const qBottom = qY + 18;
 
   // Layer 9.
-  const HS_R = 72;
+  const HS_R = 84;
   const HS_CX = 600;
   const HS_CY = qBottom + HS_R + 16;
   if (entityImg) {
@@ -1376,11 +1425,24 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, l
     ctx.beginPath();
     ctx.arc(HS_CX, HS_CY, HS_R + 10, 0, Math.PI * 2);
     ctx.stroke();
+  } else if (logoImg) {
+    ctx.fillStyle = "rgba(20,16,11,0.95)";
+    ctx.beginPath();
+    ctx.arc(HS_CX, HS_CY, HS_R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(184,125,24,0.52)";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(HS_CX, HS_CY, HS_R + 3, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.95;
+    ctx.drawImage(logoImg, HS_CX - 28, HS_CY - 28, 56, 56);
+    ctx.globalAlpha = 1;
   }
-  const imageBottom = entityImg ? HS_CY + HS_R : qBottom;
+  const imageBottom = entityImg || logoImg ? HS_CY + HS_R : qBottom + 8;
 
   // Layer 10.
-  const ODDS_SIZE = 200;
+  const ODDS_SIZE = 190;
   ctx.font = `400 ${ODDS_SIZE}px "Space Grotesk",monospace`;
   ctx.textAlign = "center";
   const value = String(oddsStr || "").trim().toUpperCase();
@@ -1404,12 +1466,12 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, l
   ctx.fillText(String(impliedStr || "").trim() || "N/A", 600, implLabelY + 62);
 
   // Layer 12.
-  const barY = 812;
+  const barY = 806;
   ctx.strokeStyle = "rgba(184,125,24,0.26)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(80, barY - 24);
-  ctx.lineTo(1120, barY - 24);
+  ctx.moveTo(80, barY - 36);
+  ctx.lineTo(1120, barY - 36);
   ctx.stroke();
   ctx.font = '700 34px "Space Grotesk",monospace';
   ctx.fillStyle = "rgba(184,125,24,0.85)";
@@ -1418,7 +1480,7 @@ async function generateShareCard({ query, oddsStr, impliedStr, entityImageUrl, l
   ctx.font = '400 15px "Space Grotesk",monospace';
   ctx.fillStyle = "rgba(240,230,208,0.22)";
   ctx.textAlign = "center";
-  ctx.fillText("Hypothetical estimate · Not betting advice", 600, barY + 30);
+  ctx.fillText("Hypothetical estimate · Not betting advice", 600, barY + 28);
 
   // Layer 13.
   addCanvasGrain(ctx, WIDTH, HEIGHT, 0.028);

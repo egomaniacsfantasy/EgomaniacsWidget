@@ -3,4 +3,5 @@ node_modules
 .DS_Store
 data/tmp
 data/feedback_events.jsonl
+data/odds_query_events.jsonl
 npm-debug.log*

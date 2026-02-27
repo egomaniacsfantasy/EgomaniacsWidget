@@ -51,6 +51,7 @@ const FEATURE_ENABLE_TRACE = String(process.env.FEATURE_ENABLE_TRACE || "true") 
 const STRICT_BOOT_SELFTEST = String(process.env.STRICT_BOOT_SELFTEST || "false") === "true";
 const execFileAsync = promisify(execFile);
 let nflPlayerIndex = new Map();
+let nflLastNameIndex = new Map();
 let nflIndexLoadedAt = 0;
 let nflIndexLoadPromise = null;
 let nflIndexDigest = "na";
@@ -524,10 +525,6 @@ installExternalToolProxy("/bracket-lab", BRACKET_APP_URL);
 installExternalToolProxy("/what-are-the-odds", WATO_APP_URL);
 installExternalToolProxy("/odds", WATO_APP_URL);
 
-app.get("/", (_req, res) => {
-  res.sendFile(path.join(process.cwd(), "what-are-the-odds", "index.html"));
-});
-
 app.use(express.static("."));
 
 function isUnsafeImageHost(hostname) {
@@ -693,12 +690,13 @@ function buildOffTopicSnarkResponse(prompt) {
   };
 }
 
-function buildDeterministicDataSnarkResponse(prompt) {
-  return buildSentinelResult({
-    prompt: prompt || "",
-    reason: "Scenario could not be priced with deterministic data.",
-    type: "unsupported",
-  });
+function buildDeterministicDataSnarkResponse() {
+  return {
+    status: "snark",
+    title: "Need Better Data.",
+    message: "I don’t have enough deterministic data to price that reliably yet, so I’m not guessing.",
+    hint: "Try a concrete NFL scenario: player stat threshold, playoff outcome, awards, or team futures.",
+  };
 }
 
 function hasPlayerMovementIntent(prompt) {
@@ -1113,10 +1111,10 @@ function parseCompositePrompt(prompt) {
     .replace(/\bor\s+less\b/gi, "or_less")
     .replace(/\bor\s+more\b/gi, "or_more")
     .replace(/\band\s+a\s+half\b/gi, "and_a_half");
-  if (!/\b(and|or|but)\b/.test(normalized)) return null;
+  if (!/\b(and|or)\b/.test(normalized)) return null;
   if (/\bbefore\b/.test(normalized)) return null;
-  const parts = normalized.split(/\s+(and|or|but)\s+/).filter(Boolean);
-  const rawParts = protectedRaw.split(/\s+(and|or|but)\s+/i).filter(Boolean);
+  const parts = normalized.split(/\s+(and|or)\s+/).filter(Boolean);
+  const rawParts = protectedRaw.split(/\s+(and|or)\s+/i).filter(Boolean);
   if (parts.length < 3) return null;
   const clauses = [];
   const rawClauses = [];
@@ -1135,7 +1133,7 @@ function parseCompositePrompt(prompt) {
       );
     }
     const op = parts[i + 1];
-    if (op) ops.push(op.toLowerCase() === "but" ? "and" : op.toLowerCase());
+    if (op) ops.push(op.toLowerCase());
   }
   if (clauses.length < 2) return null;
   const opSet = new Set(ops);
@@ -1158,34 +1156,13 @@ function parseWildcardStatClause(prompt) {
 function parseConditionalPrompt(prompt) {
   const raw = String(prompt || "").trim();
   if (!raw) return null;
-  const lower = normalizePrompt(raw);
-
-  const assumeParen = raw.match(/\((?:assume|assuming)\s+([^)]{3,120})\)/i);
-  if (assumeParen && assumeParen[1]) {
-    const condition = assumeParen[1].trim();
-    const main = raw.replace(assumeParen[0], "").replace(/\s+/g, " ").trim();
-    if (condition && main) return { left: condition, right: main };
-  }
-
-  if (/\bgiven that\b/.test(lower)) {
-    const parts = raw.split(/\bgiven that\b/i);
-    const right = parts[0]?.trim();
-    const left = parts.slice(1).join(" given that ").trim();
-    if (left && right) return { left, right };
-  }
-
-  if (/\bassuming\b/.test(lower)) {
-    const parts = raw.split(/\bassuming\b/i);
-    const right = parts[0]?.trim();
-    const left = parts.slice(1).join(" assuming ").trim();
-    if (left && right) return { left, right };
-  }
   const arrow = raw.split(/\s*(?:->|→)\s*/);
   if (arrow.length >= 2) {
     const left = arrow[0]?.trim();
     const right = arrow.slice(1).join(" -> ").trim();
     if (left && right) return { left, right };
   }
+  const lower = normalizePrompt(raw);
   if (/\bthen\b/.test(lower) && !/\bif\b/.test(lower)) {
     const thenParts = raw.split(/\bthen\b/i);
     const left = thenParts[0]?.trim();
@@ -1354,29 +1331,51 @@ function parseOutcomeClause(clause, defaults = {}) {
     }
   }
 
-  const statIntent = parseSeasonStatIntent(clause);
+  let statIntent = parseSeasonStatIntent(clause);
+  if (!statIntent && defaults.player) {
+    const lowerStat = normalizePrompt(clause);
+    const numMatch = lowerStat.match(/\b(\d{2,4})\b/);
+    if (numMatch) {
+      const threshold = Number(numMatch[1]);
+      if (Number.isFinite(threshold)) {
+        if (threshold <= 70) {
+          statIntent = { metric: "passing_tds", threshold };
+        } else if (threshold >= 300) {
+          statIntent = { metric: "passing_yards", threshold };
+        }
+      }
+    }
+  }
   if (statIntent) {
     const lower = normalizePrompt(clause);
     if (/\b(any|a)\s+(qb|quarterback)\b/.test(lower)) {
-      return { type: "any_qb_stat", metric: statIntent.metric, threshold: statIntent.threshold, scope: statIntent.scope || "season" };
+      return { type: "any_qb_stat", metric: statIntent.metric, threshold: statIntent.threshold };
     }
     const player = extractPlayerName(clause) || defaults.player || "";
     if (player) {
-      return { type: "player_stat", player, metric: statIntent.metric, threshold: statIntent.threshold, scope: statIntent.scope || "season" };
+      const lowerStat = normalizePrompt(clause);
+      let metric = statIntent.metric;
+      if (
+        metric === "total_tds" &&
+        !/\b(rushing|receiving|scrimmage|total)\b/.test(lowerStat)
+      ) {
+        metric = "passing_tds";
+      }
+      return { type: "player_stat", player, metric, threshold: statIntent.threshold };
     }
     if (/\b(rookie\s+qb|rookie\s+quarterback)\b/.test(lower)) {
-      return { type: "any_rookie_qb_stat", metric: statIntent.metric, threshold: statIntent.threshold, scope: statIntent.scope || "season" };
+      return { type: "any_rookie_qb_stat", metric: statIntent.metric, threshold: statIntent.threshold };
     }
     if (/\b(qb|quarterback)\b/.test(lower)) {
-      return { type: "any_qb_stat", metric: statIntent.metric, threshold: statIntent.threshold, scope: statIntent.scope || "season" };
+      return { type: "any_qb_stat", metric: statIntent.metric, threshold: statIntent.threshold };
     }
     if (/\b(rusher|rushing|rush)\b/.test(lower)) {
-      return { type: "any_rusher_stat", metric: statIntent.metric, threshold: statIntent.threshold, scope: statIntent.scope || "season" };
+      return { type: "any_rusher_stat", metric: statIntent.metric, threshold: statIntent.threshold };
     }
     if (/\b(receiver|receiving|wr|te|tight end|wide receiver)\b/.test(lower)) {
-      return { type: "any_receiver_stat", metric: statIntent.metric, threshold: statIntent.threshold, scope: statIntent.scope || "season" };
+      return { type: "any_receiver_stat", metric: statIntent.metric, threshold: statIntent.threshold };
     }
-    return { type: "any_player_stat", metric: statIntent.metric, threshold: statIntent.threshold, scope: statIntent.scope || "season" };
+    return { type: "any_player_stat", metric: statIntent.metric, threshold: statIntent.threshold };
   }
   if (/\b(any|a)\s+(qb|quarterback)\b/.test(lower)) {
     const num = lower.match(/\b(\d{1,4})\b/);
@@ -3269,27 +3268,30 @@ async function estimateOutcomeProbabilityByType(outcome, asOfDate) {
   if (outcome.type === "any_qb_stat") {
     const metric = String(outcome.metric || "passing_yards");
     const threshold = Number(outcome.threshold || 4500);
-    const scope = String(outcome.scope || "season");
-    const scopeText = scope === "game" ? "in a single game" : "this season";
-    const labelMetric =
+    const fallbackPrompt =
       metric === "passing_tds"
-        ? "passing TDs"
+        ? `a qb throws ${threshold} tds this season`
         : metric === "passing_interceptions"
-          ? "passing INTs"
-          : "passing yards";
-    const label = scope === "game"
-      ? `Any QB ${labelMetric} ${threshold} (single game)`
-      : `Any QB ${labelMetric} ${threshold} season`;
-    const baselinePrompt =
-      metric === "passing_tds"
-        ? `a qb throws ${threshold} tds ${scopeText}`
-        : metric === "passing_interceptions"
-          ? `a qb throws ${threshold} interceptions ${scopeText}`
-          : `a qb throws ${threshold} yards ${scopeText}`;
-    const perQb = buildBaselineEstimate(baselinePrompt, {}, today);
-    const per = perQb ? parseImpliedProbabilityPct(perQb.impliedProbability) : 8;
-    const perProb = clamp(per / 100, 0.01, 0.6);
-    const anyPct = clamp((1 - Math.pow(1 - perProb, 32)) * 100, 10, 95);
+          ? `a qb throws ${threshold} interceptions this season`
+          : `a qb throws ${threshold} yards this season`;
+    let anyPct = null;
+    let label = `Any QB ${metric.replace(/_/g, " ")} ${threshold}`;
+    try {
+      const { estimateAnyQbSeasonThreshold } = await import("./engine/baselines.js");
+      const derived = estimateAnyQbSeasonThreshold(metric, threshold, today);
+      if (derived && Number.isFinite(derived.pct)) {
+        anyPct = derived.pct;
+        label = derived.label || label;
+      }
+    } catch {
+      // fall through to baseline
+    }
+    if (!Number.isFinite(anyPct)) {
+      const perQb = buildBaselineEstimate(fallbackPrompt, {}, today);
+      const per = perQb ? parseImpliedProbabilityPct(perQb.impliedProbability) : 8;
+      const perProb = clamp(per / 100, 0.01, 0.6);
+      anyPct = clamp((1 - Math.pow(1 - perProb, 32)) * 100, 0.5, 95);
+    }
     return { pct: anyPct, label, eventKey: "any_qb_stat" };
   }
 
@@ -3308,15 +3310,60 @@ async function estimateOutcomeProbabilityByType(outcome, asOfDate) {
   }
 
   if (outcome.type === "any_rusher_stat") {
-    return { pct: 55, label: "Any rusher stat", eventKey: "any_rusher_stat" };
+    const metric = String(outcome.metric || "rushing_yards");
+    const threshold = Number(outcome.threshold || 1500);
+    let pct = null;
+    let label = `Any rusher ${metric.replace(/_/g, " ")} ${threshold}`;
+    try {
+      const { estimateAnySkillThreshold } = await import("./engine/baselines.js");
+      const derived = estimateAnySkillThreshold(metric, threshold, today);
+      if (derived && Number.isFinite(derived.pct)) {
+        pct = derived.pct;
+        label = derived.label || label;
+      }
+    } catch {
+      // ignore
+    }
+    if (!Number.isFinite(pct)) pct = 55;
+    return { pct, label, eventKey: "any_rusher_stat" };
   }
 
   if (outcome.type === "any_receiver_stat") {
-    return { pct: 50, label: "Any receiver stat", eventKey: "any_receiver_stat" };
+    const metric = String(outcome.metric || "receiving_yards");
+    const threshold = Number(outcome.threshold || 1000);
+    let pct = null;
+    let label = `Any receiver ${metric.replace(/_/g, " ")} ${threshold}`;
+    try {
+      const { estimateAnySkillThreshold } = await import("./engine/baselines.js");
+      const derived = estimateAnySkillThreshold(metric, threshold, today);
+      if (derived && Number.isFinite(derived.pct)) {
+        pct = derived.pct;
+        label = derived.label || label;
+      }
+    } catch {
+      // ignore
+    }
+    if (!Number.isFinite(pct)) pct = 50;
+    return { pct, label, eventKey: "any_receiver_stat" };
   }
 
   if (outcome.type === "any_player_stat") {
-    return { pct: 45, label: "Any player stat", eventKey: "any_player_stat" };
+    const metric = String(outcome.metric || "total_tds");
+    const threshold = Number(outcome.threshold || 5);
+    let pct = null;
+    let label = `Any player ${metric.replace(/_/g, " ")} ${threshold}`;
+    try {
+      const { estimateAnySkillThreshold } = await import("./engine/baselines.js");
+      const derived = estimateAnySkillThreshold(metric, threshold, today);
+      if (derived && Number.isFinite(derived.pct)) {
+        pct = derived.pct;
+        label = derived.label || label;
+      }
+    } catch {
+      // ignore
+    }
+    if (!Number.isFinite(pct)) pct = 45;
+    return { pct, label, eventKey: "any_player_stat" };
   }
 
   if (outcome.type === "any_team_win_total") {
@@ -3350,15 +3397,29 @@ function dependenceFactorForOutcomes(outcomes, estimates) {
   const teams = outcomes.map(teamFromOutcome).filter(Boolean);
   const hasSameTeam = teams.length >= 2 && teams.every((t) => isSameTeam(t, teams[0]));
   const hasPlayerStat = outcomes.some((o) => o.type === "player_stat");
+  const hasAnyQbStat = outcomes.some((o) => o.type === "any_qb_stat");
+  const hasAnyPlayerStat = outcomes.some((o) => o.type === "any_player_stat");
   const hasTeamSuccess = outcomes.some((o) =>
     ["team_market", "team_make_playoffs", "team_conf_champ_appearance", "team_win_total", "team_playoff_win"].includes(o.type)
   );
-  if (hasPlayerStat && hasTeamSuccess && hasSameTeam) return 1.55;
+  const hasTeamMarket = outcomes.some((o) => o.type === "team_market");
+  const hasTeamWinTotal = outcomes.some((o) => o.type === "team_win_total");
+  const hasPlayerAward = outcomes.some((o) => o.type === "player_award");
+  if (hasPlayerStat && hasTeamSuccess && hasSameTeam) return 2.0;
   if (outcomes.some((o) => o.type === "team_make_playoffs") && outcomes.some((o) => o.type === "team_playoff_win") && hasSameTeam) {
-    return 1.35;
+    return 1.45;
   }
   if (outcomes.some((o) => o.type === "team_win_total") && outcomes.some((o) => o.type === "team_make_playoffs") && hasSameTeam) {
-    return 1.4;
+    return 1.55;
+  }
+  if (hasPlayerAward && (hasTeamMarket || hasTeamWinTotal) && (hasSameTeam || hasTeamMarket)) {
+    return 2.2;
+  }
+  if ((hasAnyQbStat || hasAnyPlayerStat) && hasTeamMarket && outcomes.some((o) => o.type === "any_team_market")) {
+    return 0.1;
+  }
+  if (hasAnyQbStat && hasTeamMarket) {
+    return 0.35;
   }
   if (outcomes.some((o) => o.type === "non_qb_mvp") && outcomes.some((o) => o.type === "team_market")) {
     return 0.55;
@@ -3377,7 +3438,7 @@ async function buildCompositeAndEstimate(prompt, outcomes, asOfDate) {
   const base = rows.reduce((acc, r) => acc * clamp(Number(r.pct || 0) / 100, 0, 0.999), 1) * 100;
   const factor = dependenceFactorForOutcomes(outcomes, rows);
   const probPct = clamp(base * factor, 0.2, 99.0);
-  const label = rows.map((r) => r.label).filter(Boolean).join(" and ");
+    const label = rows.map((r) => r.label).filter(Boolean).join(" and ").replace(/\s+/g, " ").trim();
   return {
     status: "ok",
     odds: toAmericanOdds(probPct),
@@ -3420,7 +3481,7 @@ async function buildCompositeAndEstimateFallback(prompt, outcomes, asOfDate) {
   const base = rows.reduce((acc, r) => acc * clamp(Number(r.pct || 0) / 100, 0, 0.999), 1) * 100;
   const factor = dependenceFactorForOutcomes(outcomes, rows);
   const probPct = clamp(base * factor, 0.2, 99.0);
-  const label = rows.map((r) => r.label).filter(Boolean).join(" and ");
+    const label = rows.map((r) => r.label).filter(Boolean).join(" and ").replace(/\s+/g, " ").trim();
   return {
     status: "ok",
     odds: toAmericanOdds(probPct),
@@ -3462,7 +3523,7 @@ async function buildCompositeOrEstimate(prompt, outcomes, asOfDate) {
     probPct = (1 - none) * 100;
   }
   probPct = clamp(probPct, 0.2, 99.0);
-  const label = rows.map((r) => r.label).filter(Boolean).join(" or ");
+    const label = rows.map((r) => r.label).filter(Boolean).join(" or ").replace(/\s+/g, " ").trim();
   return {
     status: "ok",
     odds: toAmericanOdds(probPct),
@@ -3491,10 +3552,29 @@ async function buildConditionalEstimate(prompt, conditional, asOfDate) {
   const inferredRightPlayer = await inferPlayerFromTextTokens(conditional.right);
   const inferredLeftTeam = extractTeamName(conditional.left) || "";
   const inferredRightTeam = extractTeamName(conditional.right) || "";
-  const leftOutcome = parseOutcomeClause(conditional.left, {
+  let leftOutcome = parseOutcomeClause(conditional.left, {
     player: inferredLeftPlayer || "",
     team: inferredLeftTeam || "",
   });
+  if (!leftOutcome) {
+    const leftLower = normalizePrompt(conditional.left);
+    const numMatch = leftLower.match(/\b(\d{3,4})\b/);
+    if (numMatch && inferredLeftPlayer) {
+      const threshold = Number(numMatch[1]);
+      if (Number.isFinite(threshold) && threshold >= 300 && threshold <= 6000) {
+        const status = await getLocalNflPlayerStatus(inferredLeftPlayer, "");
+        const pos = String(status?.position || "").toUpperCase();
+        if (pos === "QB") {
+          leftOutcome = {
+            type: "player_stat",
+            player: inferredLeftPlayer,
+            metric: "passing_yards",
+            threshold,
+          };
+        }
+      }
+    }
+  }
   let rightOutcome = parseOutcomeClause(conditional.right, {
     player: inferredRightPlayer || "",
     team: inferredRightTeam || "",
@@ -3513,36 +3593,13 @@ async function buildConditionalEstimate(prompt, conditional, asOfDate) {
   const rightRow = await estimateOutcomeProbabilityByType(rightOutcome, asOfDate);
   if (!leftRow || !rightRow) return null;
 
-  let pct = 50;
-  const leftKey = outcomeKeyFromOutcome(leftOutcome);
-  const rightKey = outcomeKeyFromOutcome(rightOutcome);
-  if (leftKey === "team_make_playoffs" && rightKey === "team_playoff_win") {
-    const abbr = extractNflTeamAbbr(leftOutcome.team || "") || "";
-    pct = playoffWinGivenPlayoffsPct(abbr);
-  } else if (leftOutcome.type === "team_market" && rightOutcome.type === "team_conf_champ_appearance") {
-    pct = 45;
-  } else if (leftOutcome.type === "player_stat" && rightOutcome.type === "team_make_playoffs") {
-    pct = 48;
-  } else if (leftOutcome.type === "any_team_win_total" && rightOutcome.type === "any_team_conf_champ_appearance") {
-    pct = leftOutcome.wins >= 14 ? 68 : 58;
-  } else if (leftOutcome.type === "player_award" && rightOutcome.type === "team_market") {
-    pct = 35;
-  } else if (leftOutcome.type === "team_market" && rightOutcome.type === "player_award") {
-    pct = 55;
-  } else if (leftOutcome.type === "any_rookie_qb_playoffs" && rightOutcome.type === "any_rookie_qb_roy") {
-    pct = 60;
-  } else if (leftOutcome.type === "team_make_playoffs" && rightOutcome.type === "team_market") {
-    pct = 50;
-  } else if (leftOutcome.type === "team_win_total" && rightOutcome.type === "team_make_playoffs") {
-    pct = 90;
-  } else if (leftOutcome.type === "any_qb_stat" && rightOutcome.type === "player_award") {
-    pct = 50;
-  } else {
-    const base = rightRow.pct;
-    pct = clamp(base + 10, 15, 85);
-  }
+  const baseJoint = clamp((leftRow.pct / 100) * (rightRow.pct / 100), 0, 0.999) * 100;
+  const factor = dependenceFactorForOutcomes([leftOutcome, rightOutcome], [leftRow, rightRow]);
+  const jointPct = clamp(baseJoint * factor, 0.2, 99.0);
+  const denom = Math.max(0.5, leftRow.pct);
+  const pct = clamp((jointPct / denom) * 100, 1, 99);
 
-  const label = `${leftRow.label} → ${rightRow.label}`;
+  const label = `${leftRow.label} → ${rightRow.label}`.replace(/\s+/g, " ").trim();
   const probPct = clamp(pct, 1, 99);
   return {
     status: "ok",
@@ -5339,6 +5396,24 @@ function rebuildNflIndexDigests(indexMap) {
   nflIndexDigestBuiltAt = Date.now();
 }
 
+function rebuildNflLastNameIndex(indexMap) {
+  const map = new Map();
+  for (const entries of indexMap.values()) {
+    for (const e of entries || []) {
+      const full = String(e?.fullName || "").trim();
+      if (!full) continue;
+      const parts = full.split(/\s+/).filter(Boolean);
+      const last = parts[parts.length - 1];
+      if (!last) continue;
+      const key = normalizePersonName(last);
+      if (!key) continue;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(e);
+    }
+  }
+  nflLastNameIndex = map;
+}
+
 function ageFromBirthDate(birthDate) {
   const str = String(birthDate || "");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
@@ -5391,6 +5466,7 @@ async function loadNflPlayerIndex(force = false) {
       }
       nflPlayerIndex = map;
       rebuildNflIndexDigests(nflPlayerIndex);
+      rebuildNflLastNameIndex(nflPlayerIndex);
       nflIndexLoadedAt = Date.now();
       return nflPlayerIndex;
     } finally {
@@ -7240,6 +7316,29 @@ function extractPlayerName(prompt) {
     const words = phrase.split(" ");
     if (words.some((w) => NON_NAME_TOKENS.has(w))) continue;
     return titleCase(phrase);
+  }
+
+  // Third pass: resolve single-token last names using the NFL index.
+  const context = raw.toLowerCase();
+  const qbContext = /\b(qb|quarterback|passing|pass(?:ing)?|tds?|touchdowns?|yards?)\b/.test(context);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (!token || NON_NAME_TOKENS.has(token)) continue;
+    if (INVALID_PERSON_PHRASES.has(token) || COMMON_NON_NAME_PHRASES.has(token)) continue;
+    const key = normalizePersonName(token);
+    if (!key) continue;
+    const candidates = nflLastNameIndex.get(key);
+    if (!candidates || candidates.length === 0) continue;
+    let filtered = candidates;
+    if (qbContext) {
+      const qbOnly = candidates.filter((c) => String(c?.position || "").toUpperCase() === "QB");
+      if (qbOnly.length) filtered = qbOnly;
+    }
+    const active = filtered.filter((c) => String(c?.status || "").toLowerCase() === "active");
+    if (active.length) filtered = active;
+    filtered.sort((a, b) => Number(b?.searchRank || 0) - Number(a?.searchRank || 0));
+    const best = filtered[0];
+    if (best?.fullName) return best.fullName;
   }
   return null;
 }
@@ -9850,7 +9949,7 @@ app.use("/api/odds", (req, res, next) => {
         referenceAnchors,
       });
       if (!allowLlmBackstop) {
-        const value = buildDeterministicDataSnarkResponse(promptForParsing);
+        const value = buildDeterministicDataSnarkResponse();
         metrics.snarks += 1;
         oddsCache.set(normalizedPrompt, { ts: Date.now(), value });
         semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value });
@@ -10069,7 +10168,7 @@ app.use("/api/odds", (req, res, next) => {
             return res.json(value);
           }
         }
-        const deterministicOnly = buildDeterministicDataSnarkResponse(promptForParsing);
+        const deterministicOnly = buildDeterministicDataSnarkResponse();
         metrics.snarks += 1;
         oddsCache.set(normalizedPrompt, { ts: Date.now(), value: deterministicOnly });
         semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: deterministicOnly });
@@ -10119,7 +10218,7 @@ app.use("/api/odds", (req, res, next) => {
           return res.json(value);
         }
       }
-      const deterministicOnly = buildDeterministicDataSnarkResponse(promptForParsing);
+      const deterministicOnly = buildDeterministicDataSnarkResponse();
       metrics.snarks += 1;
       oddsCache.set(normalizedPrompt, { ts: Date.now(), value: deterministicOnly });
       semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: deterministicOnly });

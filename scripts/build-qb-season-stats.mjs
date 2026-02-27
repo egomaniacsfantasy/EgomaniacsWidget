@@ -84,8 +84,12 @@ function num(v) {
 
 async function build() {
   ensureDir(tmpDir);
-  console.log("Downloading player stats CSV...");
-  await download(SOURCE_URL, sourceCsv);
+  if (!fs.existsSync(sourceCsv)) {
+    console.log("Downloading player stats CSV...");
+    await download(SOURCE_URL, sourceCsv);
+  } else {
+    console.log("Using cached player_stats.csv");
+  }
 
   const seasonMap = new Map();
   let headers = [];
@@ -126,12 +130,20 @@ async function build() {
       passingTds: 0,
       passingInts: 0,
       passingAttempts: 0,
+      passingYards: 0,
+      rushingYards: 0,
+      rushingTds: 0,
+      rushingAttempts: 0,
       games: 0,
     };
 
     prev.passingTds += num(row.passing_tds);
     prev.passingInts += num(row.interceptions);
     prev.passingAttempts += num(row.attempts);
+    prev.passingYards += num(row.passing_yards);
+    prev.rushingYards += num(row.rushing_yards);
+    prev.rushingTds += num(row.rushing_tds);
+    prev.rushingAttempts += num(row.carries);
     prev.games += 1;
     seasonMap.set(key, prev);
     rowCount += 1;
@@ -161,6 +173,10 @@ async function build() {
         passingTds: Number(s.passingTds.toFixed(0)),
         passingInts: Number(s.passingInts.toFixed(0)),
         passingAttempts: Number(s.passingAttempts.toFixed(0)),
+        passingYards: Number(s.passingYards.toFixed(0)),
+        rushingYards: Number(s.rushingYards.toFixed(0)),
+        rushingTds: Number(s.rushingTds.toFixed(0)),
+        rushingAttempts: Number(s.rushingAttempts.toFixed(0)),
         games: Number(s.games.toFixed(0)),
       })),
     };
@@ -168,6 +184,7 @@ async function build() {
 
   const tdPerSeason = seasonsAll.map((s) => s.passingTds).filter((v) => Number.isFinite(v));
   const intPerSeason = seasonsAll.map((s) => s.passingInts).filter((v) => Number.isFinite(v));
+  const rushPerSeason = seasonsAll.map((s) => s.rushingYards).filter((v) => Number.isFinite(v));
 
   const mean = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
   const std = (arr) => {
@@ -189,6 +206,8 @@ async function build() {
       passingTdsStd: Number(std(tdPerSeason).toFixed(2)),
       passingIntsMean: Number(mean(intPerSeason).toFixed(2)),
       passingIntsStd: Number(std(intPerSeason).toFixed(2)),
+      rushingYardsMean: Number(mean(rushPerSeason).toFixed(2)),
+      rushingYardsStd: Number(std(rushPerSeason).toFixed(2)),
     },
     players,
   };

@@ -1999,9 +1999,13 @@ function resolveMvpSeasonPrior(playerName) {
   return mvpPriorsIndex?.players?.get(key) || null;
 }
 
-function isEligibleForSeasonAwards(localStatus) {
+function isEligibleForSeasonAwards(localStatus, playerName = "") {
   if (!localStatus) return false;
   const status = String(localStatus.status || "").toLowerCase();
+  const fullName = String(localStatus.fullName || playerName || "").toLowerCase();
+  if (!status || status === "unknown") return false;
+  if (KNOWN_DECEASED_ATHLETES.some((name) => fullName.includes(name))) return false;
+  if (KNOWN_LONG_RETIRED_ATHLETES.some((name) => fullName.includes(name))) return false;
   return status === "active";
 }
 
@@ -2063,7 +2067,7 @@ async function buildAnyOfMvpEstimate(prompt, asOfDate) {
   const priorRows = [];
   for (const n of ordered) {
     const local = await getLocalNflPlayerStatus(n.name, "");
-    if (local && !isEligibleForSeasonAwards(local)) continue;
+    if (local && !isEligibleForSeasonAwards(local, n.name)) continue;
     const hints = parseLocalIndexNote(local?.note);
     const profile = {
       name: n.name,
@@ -2079,6 +2083,41 @@ async function buildAnyOfMvpEstimate(prompt, asOfDate) {
     }
   }
   if (seasonPcts.length < 2) {
+    if (seasonPcts.length === 1) {
+      const solo = seasonPcts[0];
+      const prior = resolveMvpSeasonPrior(solo.name);
+      const pct = clamp(Number(solo.pct || 0), 0.1, 75);
+      return {
+        status: "ok",
+        odds: toAmericanOdds(pct),
+        impliedProbability: `${pct.toFixed(1)}%`,
+        confidence: prior?.odds ? "High" : "Medium",
+        assumptions: [
+          "Only one eligible active NFL player remained after filtering ineligible candidates.",
+          prior?.odds
+            ? `${mvpPriorsIndex?.sourceBook || "FanDuel"} season MVP prior used where available.`
+            : "MVP prior estimated from deterministic position and player profile model.",
+        ],
+        playerName: solo.name,
+        headshotUrl: null,
+        summaryLabel: `${solo.name} wins MVP`,
+        liveChecked: Boolean(prior?.odds),
+        asOfDate: mvpPriorsIndex?.asOfDate || asOfDate || new Date().toISOString().slice(0, 10),
+        sourceType: prior?.odds ? "hybrid_anchored" : "historical_model",
+        sourceLabel: prior?.odds
+          ? `Single-player MVP anchored to ${mvpPriorsIndex?.sourceBook || "FanDuel"}`
+          : "Single-player MVP model",
+        sourceMarket: "nfl_mvp_single_player",
+        trace: {
+          baselineEventKey: "nfl_mvp_single_player",
+          player: solo.name,
+          pct,
+          filteredIneligible: ordered
+            .map((x) => x.name)
+            .filter((name) => normalizePersonName(name) !== normalizePersonName(solo.name)),
+        },
+      };
+    }
     if (ordered.length >= 1) {
       return buildInvalidEntityResult(prompt, "No eligible active NFL players found for season awards.", "ineligible_entity");
     }
@@ -2930,7 +2969,7 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
     const profiles = await Promise.all(
       unique.map(async (p) => {
         const local = await getLocalNflPlayerStatus(p.name, "");
-        if (local && !isEligibleForSeasonAwards(local)) {
+        if (local && !isEligibleForSeasonAwards(local, p.name)) {
           return {
             playerName: p.name,
             teamAbbr: local?.teamAbbr || "",
@@ -3860,7 +3899,7 @@ async function estimateEntityOutcomeProbability(entity, outcomeSuffix, asOfDate)
   const prompt = `${entity.name} ${outcomeSuffix}`.replace(/\s+/g, " ").trim();
   if (entity.kind === "player") {
     const local = await getLocalNflPlayerStatus(entity.name, "");
-    if (local && /\b(mvp|most valuable player)\b/i.test(outcomeSuffix) && !isEligibleForSeasonAwards(local)) {
+    if (local && /\b(mvp|most valuable player)\b/i.test(outcomeSuffix) && !isEligibleForSeasonAwards(local, entity.name)) {
       return { pct: 0, eventKey: "nfl_mvp", prompt, ineligible: true };
     }
     const hints = parseLocalIndexNote(local?.note);

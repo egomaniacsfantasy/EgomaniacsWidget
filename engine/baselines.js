@@ -1064,6 +1064,12 @@ export function buildPlayerSeasonStatEstimate(prompt, intent, profile, asOfDate,
   if (parsed.metric === "passing_tds" && parsed.threshold <= 5) {
     probabilityPct = Math.max(probabilityPct, 99.95);
   }
+  if (parsed.metric === "passing_tds" && parsed.threshold <= 1) {
+    probabilityPct = Math.max(probabilityPct, 99.98);
+  }
+  if (parsed.metric === "total_tds" && isQb && parsed.threshold <= 1) {
+    probabilityPct = Math.max(probabilityPct, 99.95);
+  }
   if (parsed.metric === "passing_yards") {
     const yardsSigma = clamp(360 + lambda * 0.08, 340, 900);
     tailProb = normalTailAtLeast(lambda, yardsSigma, parsed.threshold);

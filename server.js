@@ -1654,7 +1654,7 @@ function buildSentinelResult({ prompt, reason, type = "unsupported" }) {
 function buildNeedsClarificationResult(prompt, reason) {
   return buildSentinelResult({
     prompt,
-    reason: reason || "I need a bit more detail to price that scenario.",
+    reason: buildSnarkReason("needs_clarification", prompt, reason || "I need a bit more detail to price that scenario."),
     type: "needs_clarification",
   });
 }
@@ -1662,9 +1662,40 @@ function buildNeedsClarificationResult(prompt, reason) {
 function buildInvalidEntityResult(prompt, reason, type = "invalid_entity") {
   return buildSentinelResult({
     prompt,
-    reason: reason || "I couldn’t match that to an NFL team or player.",
+    reason: buildSnarkReason(type, prompt, reason || "I couldn’t match that to an NFL team or player."),
     type,
   });
+}
+
+function buildSnarkReason(type, prompt, fallback) {
+  const text = String(prompt || "");
+  const lower = normalizePrompt(text);
+  const base = String(fallback || "").trim();
+  if (type === "wrong_league") {
+    if (AMBIGUOUS_BUCKS_RE.test(lower)) {
+      return "That’s the NBA Bucks, not the NFL Bucs. I’m NFL-only for now.";
+    }
+    return "That looks like a non‑NFL league. I’m NFL‑only for now.";
+  }
+  if (type === "invalid_entity") {
+    if (isLikelyGibberish(lower)) {
+      return "That looks like keyboard noise. Try a real NFL player or team.";
+    }
+    return "I couldn’t match that to an NFL team or player. Try a real NFL name.";
+  }
+  if (type === "ineligible_entity") {
+    return "That player isn’t eligible for current season awards. Try an active NFL player.";
+  }
+  if (type === "needs_clarification") {
+    if (/\btotal\s+touchdowns?\s+1\b/i.test(lower)) {
+      return "Do you mean at least 1 touchdown or exactly 1? I need that detail.";
+    }
+    if (AMBIGUOUS_BUCS_RE.test(lower)) {
+      return "Did you mean the Tampa Bay Buccaneers (NFL) or the Milwaukee Bucks (NBA)?";
+    }
+    return base || "I need a bit more detail to price that scenario.";
+  }
+  return base || "Scenario cannot be priced reliably.";
 }
 
 function sanitizeRationaleText(text) {

@@ -528,6 +528,11 @@ installExternalToolProxy("/bracket-lab", BRACKET_APP_URL);
 installExternalToolProxy("/what-are-the-odds", WATO_APP_URL);
 installExternalToolProxy("/odds", WATO_APP_URL);
 
+// Force root to the WATO widget instead of the landing page.
+app.get("/", (req, res) => {
+  res.redirect(302, "/what-are-the-odds/");
+});
+
 app.use(express.static("."));
 
 function isUnsafeImageHost(hostname) {

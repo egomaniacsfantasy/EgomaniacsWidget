@@ -397,11 +397,18 @@ function getRawOddsValue() {
   return String(oddsOutput?.textContent || "").trim();
 }
 
-function renderOddsDisplay(oddsText) {
+function renderOddsDisplay(oddsText, sourceType = "") {
   const n = parseAmericanOdds(oddsText);
   oddsOutput.classList.remove("positive", "negative", "even");
   oddsOutput.classList.remove("lock-mode");
   oddsOutput.dataset.rawOdds = String(oddsText || "").trim();
+  const source = String(sourceType || "").toLowerCase();
+  if (
+    ["invalid_entity", "wrong_league", "needs_clarification", "ineligible_entity", "unsupported_market"].includes(source)
+  ) {
+    oddsOutput.textContent = oddsText;
+    return "normal";
+  }
   if (n !== null && n >= 10000) {
     oddsOutput.textContent = "NO CHANCE";
     return "no-shot";
@@ -670,6 +677,30 @@ function applyPromptSummarySizing(text) {
 }
 
 function showResult(result, prompt) {
+  const sourceType = String(result?.sourceType || "").toLowerCase();
+  if (
+    ["invalid_entity", "wrong_league", "needs_clarification", "ineligible_entity", "unsupported_market"].includes(sourceType)
+  ) {
+    const titleMap = {
+      invalid_entity: "Nice try.",
+      wrong_league: "Wrong league.",
+      needs_clarification: "Need clarification.",
+      ineligible_entity: "Not eligible.",
+      unsupported_market: "Not supported yet.",
+    };
+    const hintMap = {
+      invalid_entity: "Try a real NFL player or team scenario.",
+      wrong_league: "This tool is NFL-only right now.",
+      needs_clarification: "Try a more specific NFL outcome.",
+      ineligible_entity: "Try an active NFL player or team scenario.",
+      unsupported_market: "Try a different NFL market or stat threshold.",
+    };
+    showRefusal(String(result?.rationale || ""), {
+      title: titleMap[sourceType] || "Nice try.",
+      hint: hintMap[sourceType] || "Try a sports hypothetical instead.",
+    });
+    return;
+  }
   refusalCard.classList.add("hidden");
   resultCard.classList.remove("hidden");
   hideHeadshotProfile();
@@ -677,7 +708,7 @@ function showResult(result, prompt) {
   void resultCard.offsetWidth;
   resultCard.classList.add("result-pop");
 
-  const oddsMode = renderOddsDisplay(result.odds);
+  const oddsMode = renderOddsDisplay(result.odds, sourceType);
   applyResultCardState(oddsMode);
   probabilityOutput.textContent = result.impliedProbability;
   if (queryEcho) queryEcho.textContent = normalizePrompt(prompt);

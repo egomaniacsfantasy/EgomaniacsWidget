@@ -172,6 +172,26 @@ const tests = [
     assert: (r) => isValidOdds(r) && isValidImplied(r) && impliedMatchesOdds(r) && hasRationale(r),
   },
   {
+    name: "Invalid entity returns invalid_entity",
+    prompt: "Chunks make the playoffs",
+    assert: (r) => r.sourceType === "invalid_entity",
+  },
+  {
+    name: "Wrong league detection",
+    prompt: "Bucks make the playoffs",
+    assert: (r) => r.sourceType === "wrong_league" || r.sourceType === "needs_clarification",
+  },
+  {
+    name: "Ineligible OR MVP does not inflate",
+    prompt: "Drake Maye or Tom Brady wins MVP",
+    assert: (r) => isValidOdds(r) && isValidImplied(r),
+  },
+  {
+    name: "Ambiguous threshold needs clarification",
+    prompt: "Drake Maye total touchdowns 1",
+    assert: (r) => r.sourceType === "needs_clarification",
+  },
+  {
     name: "Friend prompt should refuse",
     prompt: "My friend John wins MVP",
     assert: (r) => isValidOdds(r) && isValidImplied(r),

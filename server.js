@@ -433,6 +433,114 @@ const RETIREMENT_PATTERNS = [
   /\bretiring\b/i,
 ];
 
+const NON_NFL_LEAGUE_RE =
+  /\b(nba|mlb|nhl|wnba|soccer|premier league|epl|world series|stanley cup|nba finals|ufc|mma|f1|formula 1|tennis|golf)\b/i;
+const NFL_CONTEXT_RE =
+  /\b(nfl|super bowl|sb|afc|nfc|touchdown|touchdowns|tds?|quarterback|qb|playoffs?|mvp|opoy|dpoy|roy)\b/i;
+const NFL_ANY_ACTOR_RE =
+  /\b(a|any)\s+(team|qb|quarterback|rookie|rookie qb|player|defender|rusher|receiver)\b/i;
+const AMBIGUOUS_BUCS_RE = /\bbucs\b/i;
+const AMBIGUOUS_BUCKS_RE = /\bbucks\b/i;
+const AMBIGUOUS_CONTEXT_RE = /\b(playoffs?|championship|title|winner|finals)\b/i;
+const SUPER_BOWL_PROP_RE = /\bsuper bowl\b/i;
+const SUPER_BOWL_EVENT_RE = /\b(super bowl|sb)\b.*\b(overtime|ot|decided by|margin)\b/i;
+
+function isLikelyGibberish(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return true;
+  const alpha = raw.match(/[a-z]/gi) || [];
+  const tokens = raw.toLowerCase().match(/[a-z]{3,}/g) || [];
+  const letterRatio = alpha.length / Math.max(1, raw.length);
+  if (tokens.length === 0 && letterRatio < 0.4) return true;
+  if (tokens.length === 1 && letterRatio < 0.45) return true;
+  return false;
+}
+
+async function validatePromptEntities(prompt) {
+  const raw = String(prompt || "").trim();
+  const lower = normalizePrompt(raw);
+  const teams = extractKnownTeamTokens(raw, 8);
+  const named = await extractKnownNflNamesFromPrompt(raw, 8);
+  const players = Array.isArray(named) ? named.map((n) => n.name).filter(Boolean) : [];
+  const hasNflEntity = teams.length > 0 || players.length > 0;
+  const hasNflContext = NFL_CONTEXT_RE.test(lower) || SUPER_BOWL_PROP_RE.test(lower);
+  const hasAnyActor = NFL_ANY_ACTOR_RE.test(lower);
+  const mentionsNonNfl = NON_NFL_LEAGUE_RE.test(lower);
+
+  if (AMBIGUOUS_BUCS_RE.test(lower) && !hasNflContext && AMBIGUOUS_CONTEXT_RE.test(lower)) {
+    return {
+      ok: false,
+      type: "needs_clarification",
+      reason: "Did you mean the Tampa Bay Buccaneers (NFL) or the Milwaukee Bucks (NBA)?",
+    };
+  }
+  if (AMBIGUOUS_BUCKS_RE.test(lower) && !hasNflContext && AMBIGUOUS_CONTEXT_RE.test(lower)) {
+    return {
+      ok: false,
+      type: "needs_clarification",
+      reason: "Did you mean the Milwaukee Bucks (NBA) or the Tampa Bay Buccaneers (NFL)?",
+    };
+  }
+
+  if (mentionsNonNfl && !hasNflEntity && !hasNflContext) {
+    return {
+      ok: false,
+      type: "wrong_league",
+      reason: "That looks like a non-NFL league. This tool currently supports NFL-only markets.",
+    };
+  }
+
+  if (AMBIGUOUS_BUCKS_RE.test(lower) && !hasNflEntity) {
+    return {
+      ok: false,
+      type: "wrong_league",
+      reason: "That appears to be an NBA team. This tool currently supports NFL-only markets.",
+    };
+  }
+
+  if (/\bnon[-\s]?qb\b/.test(lower) && /\bmvp\b/.test(lower)) {
+    return { ok: true };
+  }
+
+  if (/\b(qb|quarterback)\b/.test(lower) && /\b(mvp|playoffs?|wins?|yards?|tds?|touchdowns?|starts?)\b/.test(lower)) {
+    return { ok: true };
+  }
+
+  if (/\brookie\s+qb\b/.test(lower)) {
+    return { ok: true };
+  }
+
+  if (/\bteam\b/.test(lower)) {
+    return { ok: true };
+  }
+
+  if (/\bunderdog\b/.test(lower) && /\bplayoff\b/.test(lower)) {
+    return { ok: true };
+  }
+
+  if (hasNflEntity || hasAnyActor || SUPER_BOWL_EVENT_RE.test(lower)) {
+    return { ok: true };
+  }
+
+  if (NFL_CONTEXT_RE.test(lower) && !hasNflEntity && !hasAnyActor) {
+    return {
+      ok: false,
+      type: "invalid_entity",
+      reason: "I couldn’t match that to a specific NFL team or player.",
+    };
+  }
+
+  if (isLikelyGibberish(lower)) {
+    return {
+      ok: false,
+      type: "invalid_entity",
+      reason: "I couldn’t match that to an NFL team or player.",
+    };
+  }
+
+  return { ok: true };
+}
+
 app.use(express.json({ limit: "200kb" }));
 
 function normalizeExternalBase(url) {
@@ -1543,6 +1651,22 @@ function buildSentinelResult({ prompt, reason, type = "unsupported" }) {
   };
 }
 
+function buildNeedsClarificationResult(prompt, reason) {
+  return buildSentinelResult({
+    prompt,
+    reason: reason || "I need a bit more detail to price that scenario.",
+    type: "needs_clarification",
+  });
+}
+
+function buildInvalidEntityResult(prompt, reason, type = "invalid_entity") {
+  return buildSentinelResult({
+    prompt,
+    reason: reason || "I couldn’t match that to an NFL team or player.",
+    type,
+  });
+}
+
 function sanitizeRationaleText(text) {
   return String(text || "")
     .replace(/[+-]\d{2,6}\b/g, "")
@@ -1844,6 +1968,12 @@ function resolveMvpSeasonPrior(playerName) {
   return mvpPriorsIndex?.players?.get(key) || null;
 }
 
+function isEligibleForSeasonAwards(localStatus) {
+  if (!localStatus) return false;
+  const status = String(localStatus.status || "").toLowerCase();
+  return status === "active";
+}
+
 function mvpPerSeasonPctForProfile(profile) {
   const priorPct = resolveMvpSeasonPriorPct(profile?.name || "");
   if (Number.isFinite(priorPct) && priorPct > 0) return clamp(priorPct, 0.1, 75);
@@ -1902,6 +2032,7 @@ async function buildAnyOfMvpEstimate(prompt, asOfDate) {
   const priorRows = [];
   for (const n of ordered) {
     const local = await getLocalNflPlayerStatus(n.name, "");
+    if (local && !isEligibleForSeasonAwards(local)) continue;
     const hints = parseLocalIndexNote(local?.note);
     const profile = {
       name: n.name,
@@ -1916,7 +2047,12 @@ async function buildAnyOfMvpEstimate(prompt, asOfDate) {
       if (prior?.odds) priorRows.push(`${n.name} ${prior.odds}`);
     }
   }
-  if (seasonPcts.length < 2) return null;
+  if (seasonPcts.length < 2) {
+    if (ordered.length >= 1) {
+      return buildInvalidEntityResult(prompt, "No eligible active NFL players found for season awards.", "ineligible_entity");
+    }
+    return null;
+  }
 
   // MVP is a single-winner market each season, so "A or B or C wins" is
   // modeled as a union of mutually-exclusive outcomes.
@@ -2763,6 +2899,18 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
     const profiles = await Promise.all(
       unique.map(async (p) => {
         const local = await getLocalNflPlayerStatus(p.name, "");
+        if (local && !isEligibleForSeasonAwards(local)) {
+          return {
+            playerName: p.name,
+            teamAbbr: local?.teamAbbr || "",
+            position: p.position || "",
+            seasonPct: 0,
+            years: 6,
+            perSeason: Array.from({ length: 6 }, () => 0),
+            anchoredOdds: null,
+            ineligible: true,
+          };
+        }
         const hints = parseLocalIndexNote(local?.note);
         const profile = {
           name: p.name,
@@ -2788,7 +2936,7 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
         };
       })
     );
-    const valid = profiles.filter((p) => Array.isArray(p.perSeason) && p.perSeason.length > 0);
+    const valid = profiles.filter((p) => Array.isArray(p.perSeason) && p.perSeason.length > 0 && !p.ineligible);
     if (!valid.length) return null;
 
     const years = clamp(Math.max(...valid.map((p) => p.years || 8)), 4, 16);
@@ -2825,6 +2973,7 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
       years,
       perSeason: perSeasonUnion,
       anchoredOdds: valid.some((p) => p.anchoredOdds) ? "yes" : null,
+      ineligibleFiltered: profiles.some((p) => p.ineligible),
     };
   }
 
@@ -2832,6 +2981,7 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
   if (!market) {
     if (/\bafc\b/.test(lower) && !/\b(championship game|afccg)\b/.test(lower)) market = "afc_winner";
     if (/\bnfc\b/.test(lower) && !/\b(championship game|nfccg)\b/.test(lower)) market = "nfc_winner";
+    if (/\b(title|championship)\b/.test(lower)) market = "super_bowl_winner";
   }
   if (!market) return null;
   const inferTeamFromText = (text) => {
@@ -2877,11 +3027,11 @@ async function resolveBeforeRaceSide(sideText, asOfDate) {
 
 async function buildMixedBeforeEstimate(prompt, asOfDate) {
   const lower = normalizePrompt(prompt);
-  if (!/\bbefore\b/.test(lower)) return null;
-  const parts = String(prompt || "").split(/\bbefore\b/i);
-  if (parts.length < 2) return null;
-  const leftText = parts[0].trim();
-  const rightText = parts.slice(1).join(" before ").trim();
+  if (!/\b(before|prior to|sooner than|ahead of)\b/.test(lower)) return null;
+  const splitMatch = String(prompt || "").split(/\b(before|prior to|sooner than|ahead of)\b/i);
+  if (splitMatch.length < 3) return null;
+  const leftText = splitMatch[0].trim();
+  const rightText = splitMatch.slice(2).join(" ").trim();
   if (!leftText || !rightText) return null;
 
   const [leftResolved, rightResolved] = await Promise.all([
@@ -2914,11 +3064,11 @@ async function buildMixedBeforeEstimate(prompt, asOfDate) {
   const inferPlayerRight = await inferPlayerFromTextTokens(rightText);
   const leftFallbackOutcome = parseOutcomeClause(leftText, {
     team: extractTeamName(leftText) || "",
-    player: inferPlayerLeft || "",
+    player: inferPlayerLeft || extractPlayerName(leftText) || "",
   });
   const rightFallbackOutcome = parseOutcomeClause(rightText, {
     team: extractTeamName(rightText) || "",
-    player: inferPlayerRight || "",
+    player: inferPlayerRight || extractPlayerName(rightText) || "",
   });
   const [leftFallback, rightFallback] = await Promise.all([
     buildSideFromOutcome(leftFallbackOutcome),
@@ -3679,6 +3829,9 @@ async function estimateEntityOutcomeProbability(entity, outcomeSuffix, asOfDate)
   const prompt = `${entity.name} ${outcomeSuffix}`.replace(/\s+/g, " ").trim();
   if (entity.kind === "player") {
     const local = await getLocalNflPlayerStatus(entity.name, "");
+    if (local && /\b(mvp|most valuable player)\b/i.test(outcomeSuffix) && !isEligibleForSeasonAwards(local)) {
+      return { pct: 0, eventKey: "nfl_mvp", prompt, ineligible: true };
+    }
     const hints = parseLocalIndexNote(local?.note);
     const profile = {
       name: entity.name,
@@ -3731,12 +3884,22 @@ async function buildAnyOfEntitiesEstimate(prompt, asOfDate) {
   if (!parsed) return null;
   const { entities, outcomeSuffix } = parsed;
   const estimated = [];
+  let sawIneligible = false;
   for (const ent of entities) {
     const row = await estimateEntityOutcomeProbability(ent, outcomeSuffix, asOfDate);
     if (!row || !Number.isFinite(row.pct)) continue;
+    if (row.ineligible) {
+      sawIneligible = true;
+      continue;
+    }
     estimated.push({ ...row, entity: ent });
   }
-  if (estimated.length < 2) return null;
+  if (estimated.length < 2) {
+    if (sawIneligible) {
+      return buildInvalidEntityResult(prompt, "No eligible active NFL players found for season awards.", "ineligible_entity");
+    }
+    return null;
+  }
 
   const sameEvent = new Set(estimated.map((r) => r.eventKey));
   const mutuallyExclusive = sameEvent.size === 1 && isSingleWinnerEventKey([...sameEvent][0]);
@@ -8576,6 +8739,25 @@ app.use("/api/odds", (req, res, next) => {
     const jointEventIntent = hasJointEventScenario(promptForParsing);
     const wildcardStatHint = parseWildcardStatClause(promptForParsing);
 
+    const entityValidation = await validatePromptEntities(promptForParsing);
+    if (!entityValidation.ok) {
+      return res.json(
+        entityValidation.type === "needs_clarification"
+          ? buildNeedsClarificationResult(promptForParsing, entityValidation.reason)
+          : buildInvalidEntityResult(promptForParsing, entityValidation.reason, entityValidation.type)
+      );
+    }
+
+    if (/\b(total\s+touchdowns?|tds?)\s+1\b/i.test(promptForParsing) &&
+        !/\b(at least|exactly|at most|no more than|not more than|over|under|1\+)\b/i.test(promptForParsing)) {
+      return res.json(
+        buildNeedsClarificationResult(
+          promptForParsing,
+          "Did you mean at least 1 touchdown, or exactly 1 touchdown?"
+        )
+      );
+    }
+
     const anyMvp = await buildAnyOfMvpEstimate(promptForParsing, new Date().toISOString().slice(0, 10));
     if (anyMvp) {
       metrics.baselineServed += 1;
@@ -8634,9 +8816,14 @@ app.use("/api/odds", (req, res, next) => {
           }
         }
       }
-      const outcomes = clausesForParsing.map((clause) =>
-        parseOutcomeClause(clause, { team: defaultTeam, player: defaultPlayer })
-      );
+      const outcomes = clausesForParsing.map((clause) => {
+        const clauseTeam = extractTeamName(clause) || extractKnownTeamTokens(clause, 1)?.[0] || defaultTeam || "";
+        let clausePlayer = extractPlayerName(clause) || "";
+        if (!clausePlayer) {
+          clausePlayer = inferPlayerFromTextTokens(clause) || defaultPlayer || "";
+        }
+        return parseOutcomeClause(clause, { team: clauseTeam, player: clausePlayer });
+      });
       let missingOutcome = false;
       for (let i = 0; i < outcomes.length; i += 1) {
         if (outcomes[i]) continue;
@@ -8696,15 +8883,27 @@ app.use("/api/odds", (req, res, next) => {
           }
         }
         if (!outcomes[i]) {
+          const clauseTeam = extractTeamName(clause) || extractKnownTeamTokens(clause, 1)?.[0] || defaultTeam || "";
+          const divisionMarket = parseNflDivisionMarket(lowerClause);
+          if (clauseTeam && divisionMarket) {
+            outcomes[i] = { type: "team_market", team: clauseTeam, market: divisionMarket };
+            continue;
+          }
+          if (clauseTeam && /\bafn\b/.test(lowerClause)) {
+            outcomes[i] = { type: "team_market", team: clauseTeam, market: "nfl_afc_north_winner" };
+            continue;
+          }
           if (/\blast\b/.test(lowerClause)) {
-            const team = extractTeamName(clause) || extractKnownTeamTokens(clause, 1)?.[0] || defaultTeam || "";
-            if (team) {
+            if (clauseTeam) {
+              const abbr = extractNflTeamAbbr(clauseTeam);
               const resolvedDivision =
-                Object.entries(NFL_DIVISION_TEAMS).find(([, teams]) =>
-                  teams.some((t) => normalizePrompt(t) === normalizePrompt(team))
-                )?.[0] || "";
+                (abbr
+                  ? Object.entries(NFL_DIVISION_TEAMS).find(([, teams]) => teams.includes(abbr))?.[0]
+                  : Object.entries(NFL_DIVISION_TEAMS).find(([, teams]) =>
+                      teams.some((t) => normalizePrompt(t) === normalizePrompt(clauseTeam))
+                    )?.[0]) || "";
               if (resolvedDivision) {
-                outcomes[i] = { type: "team_division_finish_last", team, divisionKey: resolvedDivision };
+                outcomes[i] = { type: "team_division_finish_last", team: clauseTeam, divisionKey: resolvedDivision };
                 continue;
               }
             }
@@ -8867,55 +9066,12 @@ app.use("/api/odds", (req, res, next) => {
         }
       }
       if (missingOutcome) {
-        const bestEffort = clausesForParsing.map((clause) => {
-          const bySeason = parseOutcomeClause(`${clause} this season`, { team: defaultTeam, player: defaultPlayer });
-          if (bySeason) return bySeason;
-          const base = parseOutcomeClause(clause, { team: defaultTeam, player: defaultPlayer });
-          if (base) return base;
-          const lowerClause = normalizePrompt(clause);
-          if (/\bplayoffs?\b/.test(lowerClause) && defaultTeam) {
-            return { type: "team_make_playoffs", team: defaultTeam };
-          }
-          const num = lowerClause.match(/\b(\d{1,4})\b/);
-          if (num) {
-            const threshold = Number(num[1]);
-            if (Number.isFinite(threshold)) {
-              if (/\b(td|tds|touchdown|touchdowns)\b/.test(lowerClause)) {
-                return defaultPlayer
-                  ? { type: "player_stat", player: defaultPlayer, metric: "total_tds", threshold }
-                  : { type: "any_player_stat", metric: "total_tds", threshold };
-              }
-              if (/\byards?\b/.test(lowerClause)) {
-                let metric = "total_yards";
-                if (/\b(qb|quarterback|passing)\b/.test(lowerClause)) metric = "passing_yards";
-                else if (/\brushing\b|\brush\b/.test(lowerClause)) metric = "rushing_yards";
-                else if (/\breceiving\b|\bwr\b|\bte\b/.test(lowerClause)) metric = "receiving_yards";
-                return defaultPlayer
-                  ? { type: "player_stat", player: defaultPlayer, metric, threshold }
-                  : /\b(qb|quarterback)\b/.test(lowerClause)
-                    ? { type: "any_qb_stat", metric, threshold }
-                    : { type: "any_player_stat", metric, threshold };
-              }
-            }
-          }
-          if (/\b(super bowl|sb)\b/.test(lowerClause)) {
-            return defaultTeam
-              ? { type: "team_market", team: defaultTeam, market: "super_bowl_winner" }
-              : { type: "any_team_market", market: "super_bowl_winner" };
-          }
-          if (/\bafc\b/.test(lowerClause) && defaultTeam) return { type: "team_market", team: defaultTeam, market: "afc_winner" };
-          if (/\bnfc\b/.test(lowerClause) && defaultTeam) return { type: "team_market", team: defaultTeam, market: "nfc_winner" };
-          return null;
-        });
-        for (let i = 0; i < bestEffort.length; i += 1) {
-          if (bestEffort[i]) outcomes[i] = bestEffort[i];
-        }
-        for (let i = 0; i < outcomes.length; i += 1) {
-          if (!outcomes[i]) {
-            outcomes[i] = { type: "any_player_stat", metric: "total_tds", threshold: 5 };
-          }
-        }
-        missingOutcome = false;
+        return res.json(
+          buildNeedsClarificationResult(
+            promptForParsing,
+            "I couldn’t clearly parse all clauses in this multi-part scenario."
+          )
+        );
       }
       const contradiction = detectCompositeContradiction(outcomes);
       if (contradiction) {
@@ -8986,6 +9142,31 @@ app.use("/api/odds", (req, res, next) => {
           type: "unsupported_composite",
         })
       );
+    }
+
+    if (/\b(before|prior to|sooner than|ahead of)\b/i.test(promptForParsing)) {
+      const beforeResult = await buildMixedBeforeEstimate(promptForParsing, new Date().toISOString().slice(0, 10));
+      if (beforeResult) {
+        metrics.baselineServed += 1;
+        let stable = await enrichEntityMedia(promptForParsing, beforeResult, "", extractTeamName(promptForParsing) || "");
+        stable = applyConsistencyAndTrack({ prompt: promptForParsing, intent, result: stable });
+        stable = decorateForScenarioComplexity(stable, false, false);
+        if (FEATURE_ENABLE_TRACE) {
+          stable.trace = { ...(stable.trace || {}), intent, canonicalPromptKey: semanticKey, apiVersion: API_PUBLIC_VERSION };
+        }
+        oddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
+        semanticOddsCache.set(normalizedPrompt, { ts: Date.now(), value: stable });
+        await storeStableIfLowVolatility(normalizedPrompt, promptForParsing, stable);
+        return res.json(stable);
+      }
+      if (!beforeResult) {
+        return res.json(
+          buildNeedsClarificationResult(
+            promptForParsing,
+            "I couldn’t clearly parse both sides of the before/then comparison."
+          )
+        );
+      }
     }
 
     if (isLowVolatilityPrompt(promptForParsing)) {

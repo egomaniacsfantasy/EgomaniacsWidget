@@ -391,16 +391,26 @@ function parseAmericanOdds(oddsText) {
   return Number.isFinite(n) ? n : null;
 }
 
+function getRawOddsValue() {
+  const raw = String(oddsOutput?.dataset?.rawOdds || "").trim();
+  if (raw) return raw;
+  return String(oddsOutput?.textContent || "").trim();
+}
+
 function renderOddsDisplay(oddsText) {
   const n = parseAmericanOdds(oddsText);
   oddsOutput.classList.remove("positive", "negative", "even");
   oddsOutput.classList.remove("lock-mode");
-  oddsOutput.textContent = oddsText;
-  if (n !== null) {
-    if (n > 0) oddsOutput.classList.add("positive");
-    else if (n < 0) oddsOutput.classList.add("negative");
-    else oddsOutput.classList.add("even");
+  oddsOutput.dataset.rawOdds = String(oddsText || "").trim();
+  if (n !== null && n >= 10000) {
+    oddsOutput.textContent = "NO CHANCE";
+    return "no-shot";
   }
+  if (n !== null && n <= -10000) {
+    oddsOutput.textContent = "LOCK";
+    return "lock";
+  }
+  oddsOutput.textContent = oddsText;
   return "normal";
 }
 
@@ -940,7 +950,7 @@ async function onSubmit(event) {
 async function copyCurrentResult() {
   if (resultCard.classList.contains("hidden")) return;
   const source = freshnessLine.classList.contains("hidden") ? "Hypothetical estimate" : freshnessLine.textContent;
-  const payload = `${promptSummary.textContent} | ${oddsOutput.textContent} | ${probabilityOutput.textContent} implied | ${source} | Egomaniacs Fantasy Football - What Are the Odds?`;
+  const payload = `${promptSummary.textContent} | ${getRawOddsValue()} | ${probabilityOutput.textContent} implied | ${source} | Egomaniacs Fantasy Football - What Are the Odds?`;
 
   try {
     await navigator.clipboard.writeText(payload);
@@ -1150,7 +1160,7 @@ function addCanvasGrain(ctx, w, h, opacity = 0.03) {
 
 function getCurrentShareData() {
   const query = normalizeSummaryText(queryEcho?.textContent || scenarioInput.value || "");
-  const oddsStr = String(oddsOutput.textContent || "").trim();
+  const oddsStr = getRawOddsValue();
   const impliedStr = String(probabilityOutput.textContent || "").trim();
   const primaryCluster = document.querySelector("#entity-strip img.entity-avatar");
   const visiblePrimary = playerHeadshot && !playerHeadshot.classList.contains("hidden") ? playerHeadshot : null;
@@ -1173,7 +1183,7 @@ function getCurrentShareData() {
 
 function buildShareData(result, prompt) {
   const query = normalizeSummaryText(prompt || queryEcho?.textContent || scenarioInput.value || "");
-  const oddsStr = String(result?.odds || oddsOutput.textContent || "").trim();
+  const oddsStr = String(result?.odds || getRawOddsValue() || "").trim();
   const impliedStr = String(result?.impliedProbability || probabilityOutput.textContent || "").trim();
   const firstEntityImage =
     (Array.isArray(result?.entityAssets) && result.entityAssets.length

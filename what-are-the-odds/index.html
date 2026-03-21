@@ -3,17 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Odds Gods | What Are the Odds?</title>
+    <title>What Are the Odds? | Odds Gods</title>
     <meta
       name="description"
-      content="What Are the Odds? by Odds Gods. Instant hypothetical American odds estimates for NFL scenarios."
+      content="Type any NFL scenario. Get American odds and implied probability instantly. Free, no signup."
     />
+
+    <meta property="og:title" content="What Are the Odds? | Odds Gods" />
+    <meta property="og:description" content="Type any NFL scenario. Get the odds instantly." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://wato.oddsgods.net" />
+    <meta property="og:image" content="https://wato.oddsgods.net/assets/og-wato-share.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <link rel="icon" href="../favicon.ico" sizes="any" />
+    <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="../apple-touch-icon.png" />
+    <link rel="manifest" href="../site.webmanifest" />
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+
+    <link rel="stylesheet" href="../landing.css" />
     <link rel="stylesheet" href="../styles.css" />
   </head>
   <body>
@@ -22,21 +37,15 @@
     <canvas id="bg-lightning" class="bg-canvas" aria-hidden="true"></canvas>
     <canvas id="bg-text" class="bg-canvas" aria-hidden="true"></canvas>
 
-    <header class="og-nav" id="site-nav">
+    <header class="og-nav">
       <div class="og-nav-inner">
-        <a class="brand-lockup" href="/" aria-label="Odds Gods">
-          <img class="brand-logo" src="/logo-icon.png?v=20260225b" alt="Odds Gods" width="32" height="32" />
-          <span class="og-wordmark"><span>ODDS</span> <strong>GODS</strong></span>
+        <a href="https://oddsgods.net" class="og-nav-logo brand-lockup" aria-label="Odds Gods">
+          <img src="../assets/logo-icon.png" alt="Odds Gods" class="brand-logo" width="28" height="28" />
+          <span class="og-nav-wordmark">ODDS GODS</span>
         </a>
-        <nav class="og-links" id="nav-links">
-          <a href="https://bracket.oddsgods.net/" class="nav-link">
-            The Bracket Lab
-            <span class="beta-badge">BETA</span>
-          </a>
-          <a href="https://wato.oddsgods.net/" class="nav-link is-active">
-            What Are the Odds?
-            <span class="beta-badge">BETA</span>
-          </a>
+        <nav class="og-nav-links" aria-label="Primary">
+          <a href="https://bracket.oddsgods.net" class="og-nav-link">The Bracket Lab</a>
+          <a href="https://wato.oddsgods.net" class="og-nav-link og-nav-link--active" aria-current="page">What Are the Odds?</a>
         </nav>
       </div>
     </header>
@@ -58,17 +67,22 @@
                 name="scenario"
                 rows="1"
                 maxlength="220"
-                placeholder="Josh Allen throws 30 touchdowns this season"
+                placeholder="Drake Maye throws 30 touchdowns this season"
                 required
               ></textarea>
-              <button id="flip-btn" class="flip-button hidden" type="button" aria-label="Flip sides">
+              <button id="flip-btn" class="flip-button v1-hidden" type="button" aria-label="Flip sides">
                 <span class="flip-button-icon">↺</span>
               </button>
               <button id="submit-btn" class="prompt-submit" type="submit">Estimate</button>
-              <p id="flip-tip" class="flip-tip hidden">Flip it and compare both sides.</p>
+              <p id="flip-tip" class="flip-tip v1-hidden">Flip it and compare both sides.</p>
             </div>
           </div>
         </form>
+
+        <div id="wato-loading" class="wato-loading hidden" aria-live="polite">
+          <div class="wato-loading-pulse"></div>
+          <p class="wato-loading-text">Crunching the numbers...</p>
+        </div>
 
         <article id="result-card" class="result-card hidden" aria-live="polite">
           <div class="result-topline result-card-header">
@@ -79,21 +93,37 @@
             </div>
           </div>
 
-          <p id="hof-warning" class="special-notice special-notice-text hidden">
+          <p id="prompt-summary" class="prompt-summary"></p>
+
+          <p id="hof-warning" class="special-notice special-notice-text v1-hidden">
             <span class="special-notice-icon">!</span>
             <span>We aren't all the way there yet with Hall of Fame prompts. But we're trying.</span>
           </p>
 
-          <p id="query-echo" class="result-query"></p>
+          <p id="query-echo" class="result-query v1-hidden"></p>
 
-          <p id="odds-output" class="odds-output result-odds-value">+400</p>
+          <p id="odds-output" class="odds-output">+400</p>
 
-          <div class="entity-row">
+          <div class="wato-odds-toggle-row">
+            <button id="wato-odds-toggle" class="wato-odds-toggle" type="button" aria-label="Switch odds format">
+              <span class="wato-toggle-label active" data-mode="american">American</span>
+              <span class="wato-toggle-divider">|</span>
+              <span class="wato-toggle-label" data-mode="implied">Implied</span>
+            </button>
+          </div>
+
+          <div class="entity-row v1-hidden">
             <div id="player-headshot-wrap" class="player-headshot-wrap">
               <div id="entity-strip" class="entity-strip hidden"></div>
               <div id="player-headshot-cluster" class="player-headshot-cluster hidden">
                 <img id="player-headshot" class="player-headshot entity-headshot" alt="" loading="lazy" tabindex="0" />
-                <img id="player-headshot-secondary" class="player-headshot entity-headshot player-headshot-secondary hidden" alt="" loading="lazy" tabindex="0" />
+                <img
+                  id="player-headshot-secondary"
+                  class="player-headshot entity-headshot player-headshot-secondary hidden"
+                  alt=""
+                  loading="lazy"
+                  tabindex="0"
+                />
               </div>
               <div id="headshot-profile-pop" class="headshot-profile-pop hidden" role="dialog" aria-live="polite">
                 <img id="headshot-profile-logo" class="headshot-profile-logo hidden" alt="" loading="lazy" />
@@ -101,7 +131,6 @@
                 <p id="headshot-profile-meta" class="headshot-profile-meta"></p>
               </div>
             </div>
-            <p id="prompt-summary" class="prompt-summary entity-chip"></p>
           </div>
 
           <div class="implied-section">
@@ -109,32 +138,35 @@
             <p id="probability-output" class="implied-value">20.0%</p>
           </div>
 
-          <div class="result-summary result-card-footer">
+          <div class="wato-explanation">
+            <p id="wato-explanation-text" class="wato-explanation-text"></p>
+          </div>
+
+          <div class="result-summary result-card-footer v1-hidden">
             <p id="source-line" class="source-line hidden"></p>
             <p id="freshness-line" class="freshness-line hidden"></p>
           </div>
 
-          <details id="rationale-panel" class="rationale-panel hidden result-rationale">
+          <details id="rationale-panel" class="rationale-panel result-rationale v1-hidden">
             <summary class="rationale-toggle"><span class="arrow">▸</span><span>Why this number?</span></summary>
             <ul id="rationale-list"></ul>
           </details>
 
-          <p id="disclaimer" class="disclaimer">
-            Hypothetical estimate for entertainment - not betting advice.
-          </p>
+          <p id="disclaimer" class="disclaimer">Hypothetical estimate for entertainment - not betting advice.</p>
         </article>
 
         <article id="refusal-card" class="result-card refusal hidden" aria-live="polite">
-          <p id="refusal-title" class="result-label">This tool can’t help with betting picks.</p>
+          <p class="wato-refusal-icon">⚡</p>
+          <p id="refusal-title" class="result-label refusal-title">NFL scenarios only.</p>
           <p id="refusal-copy" class="refusal-message">
             What Are the Odds? provides hypothetical entertainment estimates only.
           </p>
-          <p id="refusal-hint" class="disclaimer">Try a sports hypothetical instead.</p>
+          <p id="refusal-hint" class="disclaimer">Try an NFL scenario instead.</p>
         </article>
 
         <p id="status-line" class="status-line" aria-live="polite"></p>
 
-        <section id="feedback-pop" class="feedback-pop hidden feedback-row" aria-live="polite">
+        <section id="feedback-pop" class="feedback-pop v1-hidden hidden feedback-row" aria-live="polite">
           <p id="feedback-question" class="feedback-label">Was this estimate helpful?</p>
           <div class="feedback-actions">
             <button id="feedback-up" class="feedback-btn thumb-button" type="button" aria-label="Thumbs up">👍</button>
@@ -143,7 +175,33 @@
           <p id="feedback-thanks" class="feedback-thanks hidden">Thanks for your feedback.</p>
         </section>
 
-        <div class="examples">
+        <div id="wato-history" class="wato-history hidden">
+          <p class="wato-history-label">RECENT</p>
+          <div id="wato-history-list" class="wato-history-list"></div>
+        </div>
+
+        <div class="wato-trending">
+          <p class="wato-trending-label">TRENDING</p>
+          <div class="wato-trending-list">
+            <button type="button" class="wato-trending-chip" data-prompt="Saquon Barkley rushes for 2,000 yards">
+              Saquon Barkley rushes for 2,000 yards
+            </button>
+            <button type="button" class="wato-trending-chip" data-prompt="Patrick Mahomes wins a fourth Super Bowl">
+              Mahomes wins a fourth Super Bowl
+            </button>
+            <button type="button" class="wato-trending-chip" data-prompt="Lions win the Super Bowl next season">
+              Lions win the Super Bowl
+            </button>
+            <button type="button" class="wato-trending-chip" data-prompt="Caleb Williams throws 35 touchdowns this season">
+              Caleb Williams throws 35 TDs
+            </button>
+            <button type="button" class="wato-trending-chip" data-prompt="Drake Maye wins MVP before Josh Allen">
+              Drake Maye wins MVP before Allen
+            </button>
+          </div>
+        </div>
+
+        <div class="examples v1-hidden">
           <p class="examples-best">For best results, ask questions involving skill-position players or teams.</p>
           <p class="examples-label">Try one:</p>
           <button type="button" class="example-chip">Patriots win the Super Bowl next season</button>
@@ -153,9 +211,16 @@
       </section>
     </main>
 
-    <div id="share-modal-overlay" class="share-modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="share-modal-label">
+    <div
+      id="share-modal-overlay"
+      class="share-modal-overlay hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="share-modal-label"
+    >
       <div class="share-modal">
         <p id="share-modal-label" class="share-modal-label">SHARE YOUR ODDS</p>
+        <div id="wato-share-preview" class="wato-share-preview"></div>
         <button id="share-x-btn" type="button">𝕏 &nbsp; Post to X / Twitter</button>
         <button id="share-ig-btn" type="button">Instagram</button>
         <button id="share-copy-image-btn" type="button">Copy Image</button>
@@ -164,6 +229,10 @@
       </div>
     </div>
     <div id="share-toast" class="share-toast hidden" aria-live="polite"></div>
+
+    <footer class="og-footer">
+      <p class="og-footer-text">© 2026 Odds Gods · <a href="https://oddsgods.net">oddsgods.net</a></p>
+    </footer>
 
     <script src="../app.js"></script>
   </body>

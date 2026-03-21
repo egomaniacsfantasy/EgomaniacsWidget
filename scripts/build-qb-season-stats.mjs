@@ -5,13 +5,16 @@ import https from "node:https";
 import { fileURLToPath } from "node:url";
 
 const SOURCE_URL =
-  "https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats.csv";
+  "https://github.com/nflverse/nflverse-data/releases/tag/stats_player";
+const RELEASE_API_URL =
+  "https://api.github.com/repos/nflverse/nflverse-data/releases/tags/stats_player";
+const SOURCE_NAME_RE = /^stats_player_reg_(\d{4})\.csv$/;
+const MIN_SEASON = 1999;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
 const tmpDir = path.join(root, "data", "tmp");
-const sourceCsv = path.join(tmpDir, "player_stats.csv");
 const outputJson = path.join(root, "data", "qb_season_stats.json");
 
 function normalizeName(name) {
@@ -54,12 +57,12 @@ function parseCsvLine(line) {
   return out;
 }
 
-function download(url, destination) {
+function download(url, destination, headers = {}) {
   return new Promise((resolve, reject) => {
-    const request = https.get(url, (res) => {
+    const request = https.get(url, { headers }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
-        download(res.headers.location, destination).then(resolve).catch(reject);
+        download(res.headers.location, destination, headers).then(resolve).catch(reject);
         return;
       }
       if (res.statusCode !== 200) {
@@ -77,6 +80,57 @@ function download(url, destination) {
   });
 }
 
+function fetchJson(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, { headers }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        fetchJson(res.headers.location, headers).then(resolve).catch(reject);
+        return;
+      }
+      if (res.statusCode !== 200) {
+        reject(new Error(`Request failed: ${res.statusCode}`));
+        return;
+      }
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => {
+        body += chunk;
+      });
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+    request.on("error", reject);
+  });
+}
+
+async function resolveSeasonAssets() {
+  const release = await fetchJson(RELEASE_API_URL, {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "odds-gods-data-refresh",
+  });
+  const assets = (Array.isArray(release?.assets) ? release.assets : [])
+    .map((asset) => {
+      const match = String(asset?.name || "").match(SOURCE_NAME_RE);
+      if (!match) return null;
+      const season = Number(match[1]);
+      if (!Number.isFinite(season) || season < MIN_SEASON) return null;
+      return {
+        season,
+        name: asset.name,
+        url: asset.browser_download_url,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.season - b.season);
+  return assets;
+}
+
 function num(v) {
   const n = Number(v || 0);
   return Number.isFinite(n) ? n : 0;
@@ -84,69 +138,79 @@ function num(v) {
 
 async function build() {
   ensureDir(tmpDir);
-  if (!fs.existsSync(sourceCsv)) {
-    console.log("Downloading player stats CSV...");
-    await download(SOURCE_URL, sourceCsv);
-  } else {
-    console.log("Using cached player_stats.csv");
+  const seasonAssets = await resolveSeasonAssets();
+  if (!seasonAssets.length) {
+    throw new Error("No stats_player regular-season CSV assets found.");
   }
 
   const seasonMap = new Map();
-  let headers = [];
   let rowCount = 0;
 
-  const rl = readline.createInterface({
-    input: fs.createReadStream(sourceCsv),
-    crlfDelay: Infinity,
-  });
-
-  for await (const line of rl) {
-    if (!line) continue;
-    if (!headers.length) {
-      headers = parseCsvLine(line);
-      continue;
+  for (const asset of seasonAssets) {
+    const sourceCsv = path.join(tmpDir, `player_stats_${asset.season}.csv`);
+    if (!fs.existsSync(sourceCsv)) {
+      console.log(`Downloading ${asset.name}...`);
+      await download(asset.url, sourceCsv, {
+        "User-Agent": "odds-gods-data-refresh",
+      });
+    } else {
+      console.log(`Using cached ${path.basename(sourceCsv)}`);
     }
-    const cols = parseCsvLine(line);
-    if (cols.length !== headers.length) continue;
-    const row = {};
-    for (let i = 0; i < headers.length; i += 1) row[headers[i]] = cols[i];
 
-    if ((row.position || "").toUpperCase() !== "QB") continue;
-    if ((row.season_type || "").toUpperCase() !== "REG") continue;
+    let headers = [];
+    const rl = readline.createInterface({
+      input: fs.createReadStream(sourceCsv),
+      crlfDelay: Infinity,
+    });
 
-    const season = Number(row.season);
-    if (!Number.isFinite(season) || season < 1999) continue;
+    for await (const line of rl) {
+      if (!line) continue;
+      if (!headers.length) {
+        headers = parseCsvLine(line);
+        continue;
+      }
+      const cols = parseCsvLine(line);
+      if (cols.length !== headers.length) continue;
+      const row = {};
+      for (let i = 0; i < headers.length; i += 1) row[headers[i]] = cols[i];
 
-    const displayName = row.player_display_name || row.player_name || "";
-    if (!displayName) continue;
+      if ((row.position || "").toUpperCase() !== "QB") continue;
+      if ((row.season_type || "").toUpperCase() !== "REG") continue;
 
-    const playerKey = normalizeName(displayName);
-    const key = `${playerKey}::${season}`;
+      const season = Number(row.season);
+      if (!Number.isFinite(season) || season < MIN_SEASON) continue;
 
-    const prev = seasonMap.get(key) || {
-      playerName: displayName,
-      playerKey,
-      season,
-      passingTds: 0,
-      passingInts: 0,
-      passingAttempts: 0,
-      passingYards: 0,
-      rushingYards: 0,
-      rushingTds: 0,
-      rushingAttempts: 0,
-      games: 0,
-    };
+      const displayName = row.player_display_name || row.player_name || "";
+      if (!displayName) continue;
 
-    prev.passingTds += num(row.passing_tds);
-    prev.passingInts += num(row.interceptions);
-    prev.passingAttempts += num(row.attempts);
-    prev.passingYards += num(row.passing_yards);
-    prev.rushingYards += num(row.rushing_yards);
-    prev.rushingTds += num(row.rushing_tds);
-    prev.rushingAttempts += num(row.carries);
-    prev.games += 1;
-    seasonMap.set(key, prev);
-    rowCount += 1;
+      const playerKey = normalizeName(displayName);
+      const key = `${playerKey}::${season}`;
+
+      const prev = seasonMap.get(key) || {
+        playerName: displayName,
+        playerKey,
+        season,
+        passingTds: 0,
+        passingInts: 0,
+        passingAttempts: 0,
+        passingYards: 0,
+        rushingYards: 0,
+        rushingTds: 0,
+        rushingAttempts: 0,
+        games: 0,
+      };
+
+      prev.passingTds += num(row.passing_tds);
+      prev.passingInts += num(row.passing_interceptions || row.interceptions);
+      prev.passingAttempts += num(row.attempts);
+      prev.passingYards += num(row.passing_yards);
+      prev.rushingYards += num(row.rushing_yards);
+      prev.rushingTds += num(row.rushing_tds);
+      prev.rushingAttempts += num(row.carries);
+      prev.games += num(row.games || 0);
+      seasonMap.set(key, prev);
+      rowCount += 1;
+    }
   }
 
   const perPlayer = new Map();

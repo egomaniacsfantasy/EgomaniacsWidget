@@ -426,6 +426,7 @@ export function parseSeasonStatIntent(prompt) {
     p
   );
   if (careerLike && !seasonLike) return null;
+  const exact = /\bexactly\b/.test(p);
   const normalized = p
     .replace(/,/g, "")
     .replace(/\brushers?\s+for\b/g, "rushes for")
@@ -444,18 +445,18 @@ export function parseSeasonStatIntent(prompt) {
     const threshold = Number(passing[1]);
     const metricWord = passing[2] || "";
     if (!Number.isFinite(threshold) || threshold < 1) return null;
-    if (/\byards?|yds?\b/.test(metricWord)) return { metric: "passing_yards", threshold };
-    return { metric: /\bint|interception|pick\b/.test(metricWord) ? "passing_interceptions" : "passing_tds", threshold };
+    if (/\byards?|yds?\b/.test(metricWord)) return { metric: "passing_yards", threshold, exact };
+    return { metric: /\bint|interception|pick\b/.test(metricWord) ? "passing_interceptions" : "passing_tds", threshold, exact };
   }
   const qbYards = normalized.match(/\b(\d{3,4})\+?\s+yards?\b/);
   if (qbYards && /\b(qb|quarterback|passing)\b/.test(normalized)) {
     const threshold = Number(qbYards[1]);
-    if (Number.isFinite(threshold) && threshold >= 500) return { metric: "passing_yards", threshold };
+    if (Number.isFinite(threshold) && threshold >= 500) return { metric: "passing_yards", threshold, exact };
   }
   const qbTds = normalized.match(/\b(\d{1,2})\+?\s+tds?\b/);
   if (qbTds && /\b(qb|quarterback|passing)\b/.test(normalized)) {
     const threshold = Number(qbTds[1]);
-    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "passing_tds", threshold };
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "passing_tds", threshold, exact };
   }
 
   const receivingTds = normalized.match(
@@ -463,7 +464,7 @@ export function parseSeasonStatIntent(prompt) {
   );
   if (receivingTds) {
     const threshold = Number(receivingTds[1]);
-    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "receiving_tds", threshold };
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "receiving_tds", threshold, exact };
   }
 
   const rushingTds = normalized.match(
@@ -471,25 +472,25 @@ export function parseSeasonStatIntent(prompt) {
   );
   if (rushingTds) {
     const threshold = Number(rushingTds[1]);
-    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "rushing_tds", threshold };
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "rushing_tds", threshold, exact };
   }
   const rushingTdsGets = normalized.match(
     /\b(?:gets?|has|records?|scores?|scored)\s+(\d{1,2})\+?\s+rushing\s+(tds?|touchdowns?)\b/
   );
   if (rushingTdsGets) {
     const threshold = Number(rushingTdsGets[1]);
-    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "rushing_tds", threshold };
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "rushing_tds", threshold, exact };
   }
   const rushingTdsCompact = normalized.match(/\b(\d{1,2})\+?\s+rushing\s+(tds?|touchdowns?)\b/);
   if (rushingTdsCompact) {
     const threshold = Number(rushingTdsCompact[1]);
-    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "rushing_tds", threshold };
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "rushing_tds", threshold, exact };
   }
 
   const receivingTdsCompact = normalized.match(/\b(\d{1,2})\+?\s+receiving\s+(tds?|touchdowns?)\b/);
   if (receivingTdsCompact) {
     const threshold = Number(receivingTdsCompact[1]);
-    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "receiving_tds", threshold };
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "receiving_tds", threshold, exact };
   }
 
   const totalTds =
@@ -499,12 +500,12 @@ export function parseSeasonStatIntent(prompt) {
     normalized.match(/\b(\d{1,2})\+?\s+(?:total\s+)?(tds?|touchdowns?)\b/);
   if (totalTds) {
     const threshold = Number(totalTds[1]);
-    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "total_tds", threshold };
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "total_tds", threshold, exact };
   }
   const bareTds = normalized.match(/\b(\d{1,2})\+?\s+tds?\b/);
   if (bareTds && !/\bpassing\b/.test(normalized) && !/\brushing\b/.test(normalized) && !/\breceiving\b/.test(normalized)) {
     const threshold = Number(bareTds[1]);
-    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "total_tds", threshold };
+    if (Number.isFinite(threshold) && threshold >= 1) return { metric: "total_tds", threshold, exact };
   }
 
   const receivingYards =
@@ -512,7 +513,7 @@ export function parseSeasonStatIntent(prompt) {
     normalized.match(/\b(\d{2,4})\+?\s+(receiving\s+)?(yards?|yds?)\b/);
   if (receivingYards && /\b(receiv\w*|catch\w*|rec)\b/.test(normalized)) {
     const threshold = Number(receivingYards[1]);
-    if (Number.isFinite(threshold) && threshold >= 10) return { metric: "receiving_yards", threshold };
+    if (Number.isFinite(threshold) && threshold >= 10) return { metric: "receiving_yards", threshold, exact };
   }
 
   const rushingYards = normalized.match(
@@ -520,19 +521,19 @@ export function parseSeasonStatIntent(prompt) {
   );
   if (rushingYards) {
     const threshold = Number(rushingYards[1]);
-    if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold };
+    if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold, exact };
   }
   const rushingYardsCompact = normalized.match(/\b(\d{2,4})\+?\s+rush(?:ing)?\b/);
   if (rushingYardsCompact) {
     const threshold = Number(rushingYardsCompact[1]);
-    if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold };
+    if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold, exact };
   }
   const rushingYardsGets = normalized.match(
     /\b(?:gets?|has|records?|posts?|puts up)\s+(\d{2,4})\+?\s+rushing\s+(yards?|yds?)\b/
   );
   if (rushingYardsGets) {
     const threshold = Number(rushingYardsGets[1]);
-    if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold };
+    if (Number.isFinite(threshold) && threshold >= 10) return { metric: "rushing_yards", threshold, exact };
   }
 
   const scrimmageYards = normalized.match(
@@ -540,7 +541,7 @@ export function parseSeasonStatIntent(prompt) {
   );
   if (scrimmageYards) {
     const threshold = Number(scrimmageYards[1]);
-    if (Number.isFinite(threshold) && threshold >= 50) return { metric: "scrimmage_yards", threshold };
+    if (Number.isFinite(threshold) && threshold >= 50) return { metric: "scrimmage_yards", threshold, exact };
   }
 
   const receptions = normalized.match(
@@ -548,10 +549,17 @@ export function parseSeasonStatIntent(prompt) {
   );
   if (receptions) {
     const threshold = Number(receptions[1]);
-    if (Number.isFinite(threshold) && threshold >= 5) return { metric: "receptions", threshold };
+    if (Number.isFinite(threshold) && threshold >= 5) return { metric: "receptions", threshold, exact };
   }
 
   return null;
+}
+
+function poissonPmf(lambda, k) {
+  if (!Number.isFinite(lambda) || lambda <= 0 || !Number.isFinite(k) || k < 0) return 0;
+  let log = -lambda + k * Math.log(lambda);
+  for (let i = 2; i <= k; i += 1) log -= Math.log(i);
+  return Math.exp(log);
 }
 
 function tierFromName(name) {
@@ -1058,16 +1066,20 @@ export function buildPlayerSeasonStatEstimate(prompt, intent, profile, asOfDate,
     }
   }
   let probabilityPct = clamp(tailProb * 100, 0.01, 99.9);
-  if (parsed.metric === "passing_tds" && parsed.threshold <= 10) {
+  if (parsed.exact) {
+    const exactProb = poissonPmf(lambda, parsed.threshold);
+    probabilityPct = clamp(exactProb * 100, 0.01, 99.9);
+  }
+  if (!parsed.exact && parsed.metric === "passing_tds" && parsed.threshold <= 10) {
     probabilityPct = Math.max(probabilityPct, 99.9);
   }
-  if (parsed.metric === "passing_tds" && parsed.threshold <= 5) {
-    probabilityPct = Math.max(probabilityPct, 99.95);
-  }
-  if (parsed.metric === "passing_tds" && parsed.threshold <= 1) {
+  if (!parsed.exact && parsed.metric === "passing_tds" && parsed.threshold <= 1) {
     probabilityPct = Math.max(probabilityPct, 99.98);
   }
-  if (parsed.metric === "total_tds" && isQb && parsed.threshold <= 1) {
+  if (!parsed.exact && parsed.metric === "passing_tds" && parsed.threshold <= 5) {
+    probabilityPct = Math.max(probabilityPct, 99.95);
+  }
+  if (!parsed.exact && parsed.metric === "total_tds" && isQb && parsed.threshold <= 1) {
     probabilityPct = Math.max(probabilityPct, 99.95);
   }
   if (parsed.metric === "passing_yards") {

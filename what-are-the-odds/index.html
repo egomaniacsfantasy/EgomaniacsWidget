@@ -37,15 +37,18 @@
     <canvas id="bg-lightning" class="bg-canvas" aria-hidden="true"></canvas>
     <canvas id="bg-text" class="bg-canvas" aria-hidden="true"></canvas>
 
-    <header class="og-nav">
+    <header class="og-nav" id="site-nav">
       <div class="og-nav-inner">
-        <a href="https://oddsgods.net" class="og-nav-logo brand-lockup" aria-label="Odds Gods">
-          <img src="../assets/logo-icon.png" alt="Odds Gods" class="brand-logo" width="28" height="28" />
-          <span class="og-nav-wordmark">ODDS GODS</span>
+        <a class="og-wordmark" href="https://oddsgods.net" aria-label="Odds Gods home">
+          <img class="brand-logo" src="../logo-icon.png?v=20260225b" alt="" width="28" height="28" />
+          <span><em>Odds</em> <strong>Gods</strong></span>
         </a>
-        <nav class="og-nav-links" aria-label="Primary">
-          <a href="https://bracket.oddsgods.net" class="og-nav-link">The Bracket Lab</a>
-          <a href="https://wato.oddsgods.net" class="og-nav-link og-nav-link--active" aria-current="page">What Are the Odds?</a>
+        <nav class="og-links" id="nav-links" aria-label="Primary">
+          <a href="https://bracket.oddsgods.net/" class="nav-link">The Bracket Lab</a>
+          <a href="https://wato.oddsgods.net/" class="nav-link is-active" aria-current="page">
+            What Are the Odds?
+            <span class="beta-badge">BETA</span>
+          </a>
         </nav>
       </div>
     </header>
@@ -100,26 +103,16 @@
             </div>
           </div>
 
-          <p id="prompt-summary" class="prompt-summary"></p>
-
-          <p id="hof-warning" class="special-notice special-notice-text v1-hidden">
+          <p id="hof-warning" class="special-notice special-notice-text hidden">
             <span class="special-notice-icon">!</span>
             <span>We aren't all the way there yet with Hall of Fame prompts. But we're trying.</span>
           </p>
 
-          <p id="query-echo" class="result-query v1-hidden"></p>
+          <p id="prompt-summary" class="prompt-summary"></p>
 
-          <p id="odds-output" class="odds-output">+400</p>
+          <p id="query-echo" class="result-query hidden"></p>
 
-          <div class="wato-odds-toggle-row">
-            <button id="wato-odds-toggle" class="wato-odds-toggle" type="button" aria-label="Switch odds format">
-              <span class="wato-toggle-label active" data-mode="american">American</span>
-              <span class="wato-toggle-divider">|</span>
-              <span class="wato-toggle-label" data-mode="implied">Implied</span>
-            </button>
-          </div>
-
-          <div class="entity-row v1-hidden">
+          <div class="entity-row">
             <div id="player-headshot-wrap" class="player-headshot-wrap">
               <div id="entity-strip" class="entity-strip hidden"></div>
               <div id="player-headshot-cluster" class="player-headshot-cluster hidden">
@@ -140,21 +133,36 @@
             </div>
           </div>
 
+          <p id="odds-output" class="odds-output result-odds-value">+400</p>
+
+          <div class="odds-format-toggle" id="odds-format-toggle">
+            <button class="oft-btn is-active" data-mode="american" type="button" aria-label="American odds">US</button>
+            <button class="oft-btn" data-mode="implied" type="button" aria-label="Implied probability">%</button>
+          </div>
+
+          <div class="wato-odds-toggle-row" style="display:none">
+            <button id="wato-odds-toggle" class="wato-odds-toggle" type="button" aria-label="Switch odds format">
+              <span class="wato-toggle-label active" data-mode="american">American</span>
+              <span class="wato-toggle-divider">|</span>
+              <span class="wato-toggle-label" data-mode="implied">Implied</span>
+            </button>
+          </div>
+
           <div class="implied-section">
             <div class="implied-label">Implied Probability</div>
             <p id="probability-output" class="implied-value">20.0%</p>
           </div>
 
-          <div class="wato-explanation">
+          <div class="wato-explanation hidden">
             <p id="wato-explanation-text" class="wato-explanation-text"></p>
           </div>
 
-          <div class="result-summary result-card-footer v1-hidden">
+          <div class="result-summary result-card-footer" style="display:none">
             <p id="source-line" class="source-line hidden"></p>
             <p id="freshness-line" class="freshness-line hidden"></p>
           </div>
 
-          <details id="rationale-panel" class="rationale-panel result-rationale v1-hidden">
+          <details id="rationale-panel" class="rationale-panel hidden result-rationale">
             <summary class="rationale-toggle"><span class="arrow">▸</span><span>Why this number?</span></summary>
             <ul id="rationale-list"></ul>
           </details>
@@ -225,5 +233,112 @@
     </footer>
 
     <script src="../app.js"></script>
+    <script>
+      /* ── Odds format toggle (pill version) ── */
+      (function initOddsFormatToggle() {
+        const toggleWrap = document.getElementById("odds-format-toggle");
+        if (!toggleWrap) return;
+
+        const oldToggle = document.querySelector(".wato-odds-toggle-row, .odds-mode-toggle, .toggle-row, .odds-toggle-row");
+        if (oldToggle) oldToggle.style.display = "none";
+
+        const buttons = toggleWrap.querySelectorAll(".oft-btn");
+        const oddsOutput = document.getElementById("odds-output");
+        const probabilityOutput = document.getElementById("probability-output");
+        const impliedSection = document.querySelector(".implied-section");
+
+        if (!oddsOutput || !probabilityOutput || !impliedSection) return;
+
+        let currentMode = "american";
+        let internalUpdate = false;
+
+        function syncStoredValues() {
+          if (currentMode === "american" || !toggleWrap.dataset.american) {
+            toggleWrap.dataset.american = oddsOutput.textContent || "";
+          }
+          toggleWrap.dataset.implied = probabilityOutput.textContent || "";
+        }
+
+        function setButtons(mode) {
+          buttons.forEach((btn) => {
+            btn.classList.toggle("is-active", btn.dataset.mode === mode);
+          });
+        }
+
+        function setMode(mode) {
+          currentMode = mode === "implied" ? "implied" : "american";
+          setButtons(currentMode);
+          internalUpdate = true;
+
+          if (currentMode === "american") {
+            oddsOutput.classList.remove("implied-hero");
+            oddsOutput.textContent = toggleWrap.dataset.american || oddsOutput.textContent;
+            impliedSection.style.display = "";
+          } else {
+            toggleWrap.dataset.american = toggleWrap.dataset.american || oddsOutput.textContent || "";
+            toggleWrap.dataset.implied = probabilityOutput.textContent || toggleWrap.dataset.implied || "";
+            oddsOutput.textContent = toggleWrap.dataset.implied || probabilityOutput.textContent || "";
+            oddsOutput.classList.add("implied-hero");
+            impliedSection.style.display = "none";
+          }
+
+          window.setTimeout(() => {
+            internalUpdate = false;
+          }, 0);
+        }
+
+        buttons.forEach((btn) => {
+          btn.addEventListener("click", () => setMode(btn.dataset.mode));
+        });
+
+        const resyncFromNewResult = () => {
+          if (internalUpdate) return;
+          if (currentMode === "american" && !oddsOutput.classList.contains("implied-hero")) {
+            toggleWrap.dataset.american = oddsOutput.textContent || "";
+            toggleWrap.dataset.implied = probabilityOutput.textContent || "";
+            setButtons("american");
+            return;
+          }
+
+          toggleWrap.dataset.american = toggleWrap.dataset.american || oddsOutput.textContent || "";
+          toggleWrap.dataset.implied = probabilityOutput.textContent || toggleWrap.dataset.implied || "";
+          if (currentMode !== "american" || oddsOutput.classList.contains("implied-hero")) {
+            setMode("american");
+          }
+        };
+
+        const observerConfig = { childList: true, characterData: true, subtree: true };
+        new MutationObserver(resyncFromNewResult).observe(oddsOutput, observerConfig);
+        new MutationObserver(resyncFromNewResult).observe(probabilityOutput, observerConfig);
+
+        syncStoredValues();
+        setMode("american");
+      })();
+    </script>
+    <script>
+      /* ── Odds color coding ── */
+      (function initOddsColorCoding() {
+        const oddsEl = document.getElementById("odds-output");
+        if (!oddsEl) return;
+
+        function applyColor() {
+          const val = (oddsEl.textContent || "").trim();
+          oddsEl.classList.remove("positive", "negative", "even");
+          if (oddsEl.classList.contains("implied-hero")) return;
+          if (val.startsWith("+")) oddsEl.classList.add("positive");
+          else if (val.startsWith("-") && val !== "-") oddsEl.classList.add("negative");
+          else if (/^even$/i.test(val)) oddsEl.classList.add("even");
+        }
+
+        applyColor();
+        new MutationObserver(applyColor).observe(oddsEl, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["class"],
+        });
+      })();
+    </script>
   </body>
 </html>

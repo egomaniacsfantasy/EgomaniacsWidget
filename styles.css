@@ -170,6 +170,16 @@ a {
   padding-bottom: var(--space-md);
 }
 
+.wato-description {
+  max-width: 480px;
+  margin: 0 auto var(--space-lg);
+  text-align: center;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
 .wato-eyebrow {
   font-size: 12px;
   font-weight: 600;
@@ -285,6 +295,27 @@ a {
 .prompt-submit:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.wato-surprise-row {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--space-xs);
+}
+
+.wato-surprise-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  padding: var(--space-xs) var(--space-sm);
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.wato-surprise-btn:hover {
+  color: var(--text-amber);
 }
 
 .prompt-submit.is-loading {

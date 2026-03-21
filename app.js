@@ -68,24 +68,39 @@ const SNARK_SOURCE_TYPES = new Set([
   "unsupported_market",
 ]);
 
+const TRENDING_POOL = [
+  { prompt: "Drake Maye throws more touchdowns than Josh Allen", label: "Drake Maye out-throws Josh Allen" },
+  { prompt: "Joe Burrow makes the Hall of Fame", label: "Joe Burrow makes the Hall of Fame" },
+  { prompt: "Mahomes finishes his career with more rings than Brady", label: "Mahomes vs Brady: career rings" },
+  { prompt: "Josh Allen wins MVP and the Bills win the Super Bowl", label: "Allen MVP + Bills Super Bowl" },
+  { prompt: "Caleb Williams throws more touchdowns than Jayden Daniels", label: "Williams out-throws Daniels" },
+  { prompt: "A defensive player wins MVP this season", label: "Defensive player wins MVP" },
+  { prompt: "A team goes 0-17 this season", label: "A team goes 0-17" },
+  { prompt: "Patriots win a Super Bowl before the Jets make the playoffs", label: "Patriots SB before Jets playoffs" },
+];
+
+const SURPRISE_POOL = [
+  ...TRENDING_POOL.map((item) => item.prompt),
+  "Lamar Jackson wins MVP before Mahomes wins another",
+  "A kicker wins MVP",
+  "Josh Allen wins MVP before he's 35",
+  "Bijan Robinson outrushes Derrick Henry this season",
+  "CeeDee Lamb gets more receiving yards than Ja'Marr Chase",
+  "An undrafted free agent wins Offensive Player of the Year",
+  "The same team wins three straight Super Bowls",
+];
+
 const DEFAULT_EXAMPLE_POOL = [
-  "Josh Allen throws 30 touchdowns this season",
-  "Drake Maye wins MVP this season",
-  "Bijan Robinson scores 12 rushing TDs this season",
-  "Ja'Marr Chase gets 1400 receiving yards this season",
-  "Justin Jefferson scores 10 receiving TDs this season",
-  "CeeDee Lamb catches 105 passes this season",
-  "Breece Hall gets 1500 scrimmage yards this season",
-  "Amon-Ra St. Brown gets 1200 receiving yards this season",
-  "Lamar Jackson throws 35 touchdowns this season",
-  "Joe Burrow throws 4200 passing yards this season",
-  "Brock Bowers scores 8 receiving TDs this season",
-  "Jahmyr Gibbs scores 14 total TDs this season",
-  "Chiefs win the AFC next season",
-  "Patriots win the AFC East next season",
-  "A team goes 17-0 in the NFL regular season",
-  "A team goes 0-17 in the NFL regular season",
-  "Drake Maye wins 2 Super Bowls",
+  "Drake Maye throws more touchdowns than Josh Allen",
+  "Joe Burrow makes the Hall of Fame",
+  "Mahomes finishes his career with more rings than Brady",
+  "Josh Allen wins MVP and the Bills win the Super Bowl",
+  "Caleb Williams throws more touchdowns than Jayden Daniels",
+  "A defensive player wins MVP this season",
+  "A team goes 0-17 this season",
+  "Josh Allen wins MVP before he's 35",
+  "Bijan Robinson outrushes Derrick Henry this season",
+  "A kicker wins MVP",
 ];
 let examplePool = [...DEFAULT_EXAMPLE_POOL];
 let lastExamples = [];
@@ -1646,7 +1661,7 @@ function applyPlaceholderSwap(text) {
 
 function startPlaceholderRotation() {
   if (placeholderTimer) clearInterval(placeholderTimer);
-  if (!scenarioInput.placeholder) scenarioInput.placeholder = pickNextPlaceholder() || "Josh Allen throws 30 touchdowns this season";
+  if (!scenarioInput.placeholder) scenarioInput.placeholder = pickNextPlaceholder() || DEFAULT_EXAMPLE_POOL[0] || "";
   placeholderTimer = setInterval(() => {
     if (document.activeElement === scenarioInput && scenarioInput.value.trim()) return;
     applyPlaceholderSwap(pickNextPlaceholder());
@@ -1668,7 +1683,7 @@ async function hydrateLiveSuggestions() {
       (p) => isNflPrompt(p) && !/\bpro\s*bowl\b/i.test(String(p || ""))
     );
     examplePool = merged.length >= 3 ? merged : [...DEFAULT_EXAMPLE_POOL];
-    placeholderPool = [...examplePool];
+    placeholderPool = [...DEFAULT_EXAMPLE_POOL];
     placeholderIdx = Math.floor(Math.random() * Math.max(1, placeholderPool.length));
   } catch (_error) {
     examplePool = [...DEFAULT_EXAMPLE_POOL];
@@ -1989,16 +2004,58 @@ if (hasSharedPrompt) {
   }
 })();
 
-// --- Trending chips ---
-(function initTrending() {
+// --- Trending prompts ---
+(function initTrendingPrompts() {
+  const trendingList = document.getElementById("wato-trending-list");
   const scenarioInputEl = document.getElementById("scenario-input");
-  if (!scenarioInputEl) return;
+  if (!trendingList || !scenarioInputEl) return;
 
-  document.querySelectorAll(".wato-trending-chip").forEach(function (chip) {
+  function shuffle(items) {
+    const copy = items.slice();
+    for (let i = copy.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const temp = copy[i];
+      copy[i] = copy[j];
+      copy[j] = temp;
+    }
+    return copy;
+  }
+
+  const selected = shuffle(TRENDING_POOL).slice(0, 4);
+  trendingList.innerHTML = "";
+
+  selected.forEach(function (item) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "wato-trending-chip";
+    chip.dataset.prompt = item.prompt;
+    chip.textContent = item.label;
     chip.addEventListener("click", function () {
-      scenarioInputEl.value = chip.dataset.prompt || chip.textContent || "";
+      scenarioInputEl.value = item.prompt;
       scenarioInputEl.dispatchEvent(new Event("input", { bubbles: true }));
       scenarioInputEl.focus();
     });
+    trendingList.appendChild(chip);
+  });
+})();
+
+// --- Surprise me ---
+(function initSurpriseMe() {
+  const surpriseBtn = document.getElementById("wato-surprise");
+  const scenarioInputEl = document.getElementById("scenario-input");
+  if (!surpriseBtn || !scenarioInputEl) return;
+
+  let lastIndex = -1;
+
+  surpriseBtn.addEventListener("click", function () {
+    let idx;
+    do {
+      idx = Math.floor(Math.random() * SURPRISE_POOL.length);
+    } while (idx === lastIndex && SURPRISE_POOL.length > 1);
+    lastIndex = idx;
+
+    scenarioInputEl.value = SURPRISE_POOL[idx];
+    scenarioInputEl.dispatchEvent(new Event("input", { bubbles: true }));
+    scenarioInputEl.focus();
   });
 })();

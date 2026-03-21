@@ -57,6 +57,10 @@
           <h1 class="wato-headline">What Are the <span class="accent">Odds?</span></h1>
         </header>
 
+        <p class="wato-description">
+          Your NFL scenarios, priced. Player stats, team futures, head-to-head matchups, and more.
+        </p>
+
         <form id="odds-form" novalidate>
           <label for="scenario-input" class="prompt-label">What are the odds that...</label>
           <div class="input-row">
@@ -67,7 +71,7 @@
                 name="scenario"
                 rows="1"
                 maxlength="220"
-                placeholder="Drake Maye throws 30 touchdowns this season"
+                placeholder="Drake Maye throws more touchdowns than Josh Allen"
                 required
               ></textarea>
               <button id="flip-btn" class="flip-button v1-hidden" type="button" aria-label="Flip sides">
@@ -76,6 +80,9 @@
               <button id="submit-btn" class="prompt-submit" type="submit">Estimate</button>
               <p id="flip-tip" class="flip-tip v1-hidden">Flip it and compare both sides.</p>
             </div>
+          </div>
+          <div class="wato-surprise-row">
+            <button id="wato-surprise" class="wato-surprise-btn" type="button">Surprise me ↻</button>
           </div>
         </form>
 
@@ -181,32 +188,15 @@
         </div>
 
         <div class="wato-trending">
-          <p class="wato-trending-label">TRENDING</p>
-          <div class="wato-trending-list">
-            <button type="button" class="wato-trending-chip" data-prompt="Saquon Barkley rushes for 2,000 yards">
-              Saquon Barkley rushes for 2,000 yards
-            </button>
-            <button type="button" class="wato-trending-chip" data-prompt="Patrick Mahomes wins a fourth Super Bowl">
-              Mahomes wins a fourth Super Bowl
-            </button>
-            <button type="button" class="wato-trending-chip" data-prompt="Lions win the Super Bowl next season">
-              Lions win the Super Bowl
-            </button>
-            <button type="button" class="wato-trending-chip" data-prompt="Caleb Williams throws 35 touchdowns this season">
-              Caleb Williams throws 35 TDs
-            </button>
-            <button type="button" class="wato-trending-chip" data-prompt="Drake Maye wins MVP before Josh Allen">
-              Drake Maye wins MVP before Allen
-            </button>
+          <p class="wato-trending-label">TRY ONE</p>
+          <div id="wato-trending-list" class="wato-trending-list">
+            <!-- Chips inserted dynamically by JS -->
           </div>
         </div>
 
         <div class="examples v1-hidden">
           <p class="examples-best">For best results, ask questions involving skill-position players or teams.</p>
           <p class="examples-label">Try one:</p>
-          <button type="button" class="example-chip">Patriots win the Super Bowl next season</button>
-          <button type="button" class="example-chip">Josh Allen wins MVP next year</button>
-          <button type="button" class="example-chip">A team goes 0-17</button>
         </div>
       </section>
     </main>
